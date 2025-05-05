@@ -22,28 +22,6 @@ use classifier::BackportClassifier;
 use utils::setup_logging;
 use models::ProviderResult;
 
-fn check_environment(models: &[String]) {
-    for model in models {
-        match model.as_str() {
-            "claude" => {
-                if std::env::var("ANTHROPIC_API_KEY").is_err() {
-                    warn!("ANTHROPIC_API_KEY not set but Claude model requested");
-                }
-            },
-            "nvidia" => {
-                if std::env::var("NVIDIA_API_KEY").is_err() {
-                    warn!("NVIDIA_API_KEY not set but NVIDIA model requested");
-                }
-            },
-            "openai" | "gpt4" | "gpt4o" => {
-                if std::env::var("OPENAI_API_KEY").is_err() {
-                    warn!("OPENAI_API_KEY not set but OpenAI model requested");
-                }
-            },
-            _ => {}
-        }
-    }
-}
 
 fn main() {
     let matches = App::new("Linux Kernel Backport Classifier")
@@ -150,7 +128,6 @@ fn main() {
 
     if matches.is_present("commit") || matches.is_present("commits") {
         info!("Using LLM providers: {:?}", llm_providers);
-        check_environment(&llm_providers);
     }
 
     let expanded_kernel_repo = shellexpand::tilde(kernel_repo);

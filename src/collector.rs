@@ -70,10 +70,10 @@ impl BackportDataCollector {
         let mut skipped_branches = 0;
 
         for branch in &stable_branches {
-            let (prefix, version) = if branch.starts_with("origin/linux-") {
-                ("origin/linux-", branch.replace("origin/linux-", ""))
+            let version = if branch.starts_with("origin/linux-") {
+                branch.replace("origin/linux-", "")
             } else if branch.starts_with("stable/linux-") {
-                ("stable/linux-", branch.replace("stable/linux-", ""))
+                branch.replace("stable/linux-", "")
             } else {
                 // Skip branches that don't match either pattern
                 continue;
