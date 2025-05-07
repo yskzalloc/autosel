@@ -21,7 +21,7 @@ mod models;
 
 // Re-exports
 pub use provider::LlmFactory;
-pub use response::{ResponseExtractor, ClaudeResponse, OpenAIResponse, NvidiaResponse};
+pub use response::{ResponseExtractor, ClaudeResponse, NvidiaResponse};
 pub use models::{ModelType, ModelHelper};
 
 // Common error type for LLM operations

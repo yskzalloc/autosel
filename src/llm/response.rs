@@ -67,7 +67,6 @@ impl ResponseExtractor for ChoicesResponse {
 
 /// Specialized response types with convenience methods
 pub type ClaudeResponse = UniversalResponse<ContentResponse>;
-pub type OpenAIResponse = UniversalResponse<ChoicesResponse>;
 pub type NvidiaResponse = UniversalResponse<ChoicesResponse>;
 
 // Create a generic implementation for all UniversalResponse types
@@ -103,7 +102,7 @@ mod tests {
             ]
         });
 
-        let response: OpenAIResponse = serde_json::from_value(response_json).unwrap();
+        let response: UniversalResponse<ChoicesResponse> = serde_json::from_value(response_json).unwrap();
         let text = response.extract_text().unwrap();
         assert_eq!(text, "Response from OpenAI");
     }
