@@ -18,6 +18,7 @@ mod ollama;
 mod client;
 mod response;
 mod models;
+mod exec;
 
 // Re-exports
 pub use provider::LlmFactory;

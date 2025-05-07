@@ -43,6 +43,6 @@ async-openai = "0.28"
 anthropic = "0.0.8"
 url = "2.5"
 anthropic-sdk = "0.1.5"
+tempfile = "3.8"
 
 [dev-dependencies]
-tempfile = "3.8"

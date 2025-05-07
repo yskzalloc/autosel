@@ -98,6 +98,16 @@ fn main() {
             .value_name("MODEL")
             .help("Ollama model to use (default: llama3, options: llama3, mistral, gemma, or a custom model name)")
             .takes_value(true))
+        .arg(Arg::with_name("exec")
+            .long("exec")
+            .value_name("PATH")
+            .help("Path to an executable for inference when using 'exec' as a model")
+            .takes_value(true))
+        .arg(Arg::with_name("exec-params")
+            .long("exec-params")
+            .value_name("PARAMS")
+            .help("Comma-separated list of parameters to pass to the executable")
+            .takes_value(true))
         .get_matches();
 
     let batch_mode = matches.is_present("batch");
@@ -263,6 +273,38 @@ fn main() {
                             }
                         }
                     }
+                }
+            }
+
+            // Configure Exec parameters if provided
+            if classifier.llm_providers.contains(&"exec".to_string()) {
+                if let Some(exec_path) = matches.value_of("exec") {
+                    // Create or get existing config for exec
+                    let exec_config = classifier.llm_configs.entry("exec".to_string())
+                        .or_insert_with(|| serde_json::json!({}));
+
+                    if let Some(obj) = exec_config.as_object_mut() {
+                        // Set executable path
+                        obj.insert("executable_path".to_string(), serde_json::json!(exec_path));
+
+                        // Set debug logging
+                        obj.insert("debug_logging".to_string(), serde_json::json!(verbose));
+
+                        // Parse and set exec parameters if provided
+                        if let Some(exec_params) = matches.value_of("exec-params") {
+                            let params: Vec<String> = exec_params.split(',')
+                                .map(|s| s.trim().to_string())
+                                .collect();
+
+                            obj.insert("arguments".to_string(), serde_json::json!(params));
+                        } else {
+                            // Set empty arguments if not provided
+                            obj.insert("arguments".to_string(), serde_json::json!(Vec::<String>::new()));
+                        }
+                    }
+                } else {
+                    error!("The 'exec' model provider requires --exec parameter to be set");
+                    std::process::exit(1);
                 }
             }
         }
@@ -486,6 +528,37 @@ fn main() {
                 }
 
                 configs.insert("ollama".to_string(), ollama_config);
+            }
+
+            // Configure Exec parameters if provided
+            if llm_providers.contains(&"exec".to_string()) {
+                if let Some(exec_path) = matches.value_of("exec") {
+                    let mut exec_config = serde_json::json!({
+                        "debug_logging": verbose
+                    });
+
+                    if let Some(obj) = exec_config.as_object_mut() {
+                        // Set executable path
+                        obj.insert("executable_path".to_string(), serde_json::json!(exec_path));
+
+                        // Parse and set exec parameters if provided
+                        if let Some(exec_params) = matches.value_of("exec-params") {
+                            let params: Vec<String> = exec_params.split(',')
+                                .map(|s| s.trim().to_string())
+                                .collect();
+
+                            obj.insert("arguments".to_string(), serde_json::json!(params));
+                        } else {
+                            // Set empty arguments if not provided
+                            obj.insert("arguments".to_string(), serde_json::json!(Vec::<String>::new()));
+                        }
+                    }
+
+                    configs.insert("exec".to_string(), exec_config);
+                } else {
+                    error!("The 'exec' model provider requires --exec parameter to be set");
+                    std::process::exit(1);
+                }
             }
 
             Some(configs)

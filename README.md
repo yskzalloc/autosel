@@ -122,7 +122,7 @@ Batch processing with saved explanations:
 
 ## License
 
-SPDX-License-Identifier: GPL-2.0  
+SPDX-License-Identifier: GPL-2.0
 (c) 2025, Sasha Levin <sashal@kernel.org>
 
 ## Contributing
