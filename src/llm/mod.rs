@@ -14,6 +14,7 @@ mod openai;
 mod claude;
 mod claude_model;
 mod nvidia;
+mod ollama;
 mod client;
 mod response;
 mod models;

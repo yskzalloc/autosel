@@ -43,7 +43,7 @@ fn main() {
         .arg(Arg::with_name("models")
             .long("models")
             .value_name("MODELS")
-            .help("Comma-separated list of models to use (claude)")
+            .help("Comma-separated list of models to use (claude, openai, nvidia, ollama)")
             .takes_value(true))
         .arg(Arg::with_name("train")
             .long("train")
@@ -87,6 +87,16 @@ fn main() {
             .long("send-prompt")
             .value_name("FILE")
             .help("Skip embeddings initialization and send the prompt in the provided file to the selected LLMs")
+            .takes_value(true))
+        .arg(Arg::with_name("ollama-server")
+            .long("ollama-server")
+            .value_name("URL")
+            .help("URL of the Ollama API server (default: http://localhost:11434)")
+            .takes_value(true))
+        .arg(Arg::with_name("ollama-model")
+            .long("ollama-model")
+            .value_name("MODEL")
+            .help("Ollama model to use (default: llama3, options: llama3, mistral, gemma, or a custom model name)")
             .takes_value(true))
         .get_matches();
 
@@ -220,10 +230,38 @@ fn main() {
             classifier.llm_providers = llm_providers.clone();
             classifier.llms = None;
 
-            if verbose && classifier.llm_providers.contains(&"claude".to_string()) {
-                if let Some(config) = classifier.llm_configs.get_mut("claude") {
+            // Set debug logging for verbose mode
+            if verbose {
+                for provider in &llm_providers {
+                    if let Some(config) = classifier.llm_configs.get_mut(provider) {
+                        if let Some(obj) = config.as_object_mut() {
+                            obj.insert("debug_logging".to_string(), serde_json::json!(true));
+                        }
+                    }
+                }
+            }
+
+            // Configure Ollama parameters if provided
+            if classifier.llm_providers.contains(&"ollama".to_string()) {
+                if let Some(config) = classifier.llm_configs.get_mut("ollama") {
                     if let Some(obj) = config.as_object_mut() {
-                        obj.insert("debug_logging".to_string(), serde_json::json!(true));
+                        // Set Ollama server URL if provided
+                        if let Some(ollama_server) = matches.value_of("ollama-server") {
+                            obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
+                        }
+
+                        // Set Ollama model if provided
+                        if let Some(ollama_model) = matches.value_of("ollama-model") {
+                            // Check if it's a built-in model or custom
+                            let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model);
+
+                            if is_builtin {
+                                obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
+                            } else {
+                                // For custom models, we'll set it as a custom model name
+                                obj.insert("custom_model".to_string(), serde_json::json!(ollama_model));
+                            }
+                        }
                     }
                 }
             }
@@ -409,13 +447,47 @@ fn main() {
     if let Some(prompt_file_path) = prompt_file {
         info!("Creating classifier for prompt processing");
 
-        let config = if matches.is_present("models") && verbose {
+        let config = if matches.is_present("models") {
             let mut configs = HashMap::new();
-            if llm_providers.contains(&"claude".to_string()) {
-                configs.insert("claude".to_string(), serde_json::json!({
-                    "debug_logging": true
-                }));
+
+            // Set debug logging for verbose mode
+            if verbose {
+                for provider in &llm_providers {
+                    configs.insert(provider.clone(), serde_json::json!({
+                        "debug_logging": true
+                    }));
+                }
             }
+
+            // Configure Ollama parameters if provided
+            if llm_providers.contains(&"ollama".to_string()) {
+                let mut ollama_config = serde_json::json!({
+                    "debug_logging": verbose
+                });
+
+                if let Some(obj) = ollama_config.as_object_mut() {
+                    // Set Ollama server URL if provided
+                    if let Some(ollama_server) = matches.value_of("ollama-server") {
+                        obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
+                    }
+
+                    // Set Ollama model if provided
+                    if let Some(ollama_model) = matches.value_of("ollama-model") {
+                        // Check if it's a built-in model or custom
+                        let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model);
+
+                        if is_builtin {
+                            obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
+                        } else {
+                            // For custom models, we'll set it as a custom model name
+                            obj.insert("custom_model".to_string(), serde_json::json!(ollama_model));
+                        }
+                    }
+                }
+
+                configs.insert("ollama".to_string(), ollama_config);
+            }
+
             Some(configs)
         } else {
             None

@@ -4,7 +4,7 @@
 use crate::llm::LlmError;
 
 /// Common trait for model types that can be used by LLM providers
-pub trait ModelType: Clone + Copy + std::fmt::Debug {
+pub trait ModelType: Clone + std::fmt::Debug {
     /// Convert a string to a model type
     fn from_str(s: &str) -> Result<Self, LlmError> where Self: Sized;
 

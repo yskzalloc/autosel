@@ -75,6 +75,7 @@ pub enum LlmProvider {
     Claude,
     OpenAI,
     Nvidia,
+    Ollama,
 }
 
 impl fmt::Display for LlmProvider {
@@ -83,6 +84,7 @@ impl fmt::Display for LlmProvider {
             LlmProvider::Claude => write!(f, "claude"),
             LlmProvider::OpenAI => write!(f, "openai"),
             LlmProvider::Nvidia => write!(f, "nvidia"),
+            LlmProvider::Ollama => write!(f, "ollama"),
         }
     }
 }
@@ -93,6 +95,7 @@ impl LlmProvider {
             "claude" => Ok(LlmProvider::Claude),
             "openai" | "gpt4" | "gpt4o" => Ok(LlmProvider::OpenAI),
             "nvidia" => Ok(LlmProvider::Nvidia),
+            "ollama" => Ok(LlmProvider::Ollama),
             _ => Err(LlmError::Config(format!("Unsupported LLM provider: {}", name))),
         }
     }
@@ -130,6 +133,11 @@ impl LlmFactory {
                 let config = NvidiaConfig::from_json(config)?;
                 Ok(Box::new(NvidiaLlm::new(config)?))
             },
+            LlmProvider::Ollama => {
+                use crate::llm::ollama::{OllamaConfig, OllamaLlm};
+                let config = OllamaConfig::from_json(config)?;
+                Ok(Box::new(OllamaLlm::new(config)?))
+            },
         }
     }
 }
@@ -143,6 +151,7 @@ mod tests {
         assert_eq!(format!("{}", LlmProvider::Claude), "claude");
         assert_eq!(format!("{}", LlmProvider::OpenAI), "openai");
         assert_eq!(format!("{}", LlmProvider::Nvidia), "nvidia");
+        assert_eq!(format!("{}", LlmProvider::Ollama), "ollama");
     }
 
     #[test]
@@ -151,15 +160,23 @@ mod tests {
         assert_eq!(LlmProvider::from_name("claude").unwrap(), LlmProvider::Claude);
         assert_eq!(LlmProvider::from_name("openai").unwrap(), LlmProvider::OpenAI);
         assert_eq!(LlmProvider::from_name("nvidia").unwrap(), LlmProvider::Nvidia);
+        assert_eq!(LlmProvider::from_name("ollama").unwrap(), LlmProvider::Ollama);
 
         // Test case insensitivity
         assert_eq!(LlmProvider::from_name("Claude").unwrap(), LlmProvider::Claude);
         assert_eq!(LlmProvider::from_name("OPENAI").unwrap(), LlmProvider::OpenAI);
         assert_eq!(LlmProvider::from_name("NvIdIa").unwrap(), LlmProvider::Nvidia);
+        assert_eq!(LlmProvider::from_name("OlLaMa").unwrap(), LlmProvider::Ollama);
 
         // Test aliases
         assert_eq!(LlmProvider::from_name("gpt4").unwrap(), LlmProvider::OpenAI);
         assert_eq!(LlmProvider::from_name("gpt4o").unwrap(), LlmProvider::OpenAI);
+
+        // Test that llama and llama3 are no longer Ollama aliases
+        let llama_result = LlmProvider::from_name("llama");
+        assert!(llama_result.is_err());
+        let llama3_result = LlmProvider::from_name("llama3");
+        assert!(llama3_result.is_err());
 
         // Test invalid provider
         let result = LlmProvider::from_name("unknown");

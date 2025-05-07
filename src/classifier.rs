@@ -80,6 +80,15 @@ impl BackportClassifier {
             "debug_logging": false
         }));
 
+        // Ollama default config
+        configs.insert("ollama".to_string(), serde_json::json!({
+            "model_type": "llama3",
+            "temperature": 0.1,
+            "max_tokens": 4096,
+            "api_host": "http://localhost:11434",
+            "debug_logging": false
+        }));
+
         configs
     }
 

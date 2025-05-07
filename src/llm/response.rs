@@ -122,6 +122,23 @@ mod tests {
     }
 
     #[test]
+    fn test_ollama_response_extraction() {
+        let response_json = json!({
+            "response": "<think>This should be removed</think>\nResponse from Ollama",
+            "model": "qwen3:32b",
+            "done": true,
+            "done_reason": "stop",
+            "context": [1, 2, 3],
+            "total_duration": 1000
+        });
+
+        use crate::llm::ollama::OllamaResponse;
+        let response: OllamaResponse = serde_json::from_value(response_json).unwrap();
+        let text = response.extract_text().unwrap();
+        assert_eq!(text, "Response from Ollama");
+    }
+
+    #[test]
     fn test_empty_response_handling() {
         let empty_content_json = json!({"content": []});
         let empty_content: ContentResponse = serde_json::from_value(empty_content_json).unwrap();
