@@ -38,6 +38,8 @@ hnsw_rs = "0.2.0"
 # For LLM API calls
 reqwest = { version = "0.11", features = ["json"] }
 async-trait = "0.1"
+ollama-rs = "0.1"
+url = "2.5"
 
 [dev-dependencies]
 tempfile = "3.8"

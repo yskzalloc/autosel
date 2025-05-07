@@ -122,20 +122,12 @@ mod tests {
     }
 
     #[test]
-    fn test_ollama_response_extraction() {
-        let response_json = json!({
-            "response": "<think>This should be removed</think>\nResponse from Ollama",
-            "model": "qwen3:32b",
-            "done": true,
-            "done_reason": "stop",
-            "context": [1, 2, 3],
-            "total_duration": 1000
-        });
+    fn test_ollama_think_block_removal() {
+        use crate::llm::ollama::remove_think_blocks;
 
-        use crate::llm::ollama::OllamaResponse;
-        let response: OllamaResponse = serde_json::from_value(response_json).unwrap();
-        let text = response.extract_text().unwrap();
-        assert_eq!(text, "Response from Ollama");
+        let text = "<think>This should be removed</think>\nResponse from Ollama";
+        let processed_text = remove_think_blocks(text);
+        assert_eq!(processed_text, "Response from Ollama");
     }
 
     #[test]
