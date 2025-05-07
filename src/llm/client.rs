@@ -3,9 +3,7 @@
 
 use std::env;
 use async_trait::async_trait;
-use log::debug;
-use serde::de::DeserializeOwned;
-use crate::http::{self, RetryConfig, AuthType, create_llm_client};
+use crate::http::{RetryConfig, AuthType, create_llm_client};
 use crate::llm::{Llm, LlmError, Message, UniversalLlmRequest};
 
 /// Base helper for accessing config values from BaseLlmConfig
@@ -23,10 +21,6 @@ pub trait ConfigHelper {
         self.base_config().max_tokens
     }
 
-    /// Get debug logging flag
-    fn get_debug_logging(&self) -> bool {
-        self.base_config().debug_logging
-    }
 
     /// Get max retries value
     fn get_max_retries(&self) -> usize {
@@ -62,9 +56,6 @@ pub trait LlmClient: Llm {
 
     /// Returns the max tokens to use for this provider
     fn max_tokens(&self) -> usize;
-
-    /// Whether debug logging is enabled for this provider
-    fn debug_logging(&self) -> bool;
 
     /// Returns max retries for API calls
     fn max_retries(&self) -> usize;
@@ -106,24 +97,4 @@ pub trait LlmClient: Llm {
         )
     }
 
-    /// Generic method to send a request and parse the response
-    async fn send_request<R>(&self, client: &reqwest::Client, request: &UniversalLlmRequest) -> Result<R, LlmError>
-    where
-        R: DeserializeOwned,
-    {
-        if self.debug_logging() {
-            debug!("Sending prompt to {} (model: {}, length: {} chars)",
-                self.api_key_env_var(), self.model_name(),
-                request.messages.first().map(|m| m.content.len()).unwrap_or(0));
-        }
-
-        let retry_config = self.create_retry_config();
-
-        http::post_json(
-            client,
-            self.api_url(),
-            request,
-            Some(retry_config)
-        ).await.map_err(|e| e.into())
-    }
 }

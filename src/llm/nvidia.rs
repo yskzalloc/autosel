@@ -155,9 +155,6 @@ impl LlmClient for NvidiaLlm {
         self.get_max_tokens()
     }
 
-    fn debug_logging(&self) -> bool {
-        self.get_debug_logging()
-    }
 
     fn max_retries(&self) -> usize {
         self.get_max_retries()

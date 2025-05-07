@@ -88,10 +88,9 @@ impl ClientBuilder {
     }
 }
 
-/// Authentication types supported for LLM providers
+/// Authentication type supported for LLM providers
 pub enum AuthType {
     BearerToken(String),
-    ApiKey { header_name: String, key: String },
 }
 
 /// Create a client configured for an LLM API
@@ -101,7 +100,6 @@ pub fn create_llm_client(auth: AuthType, additional_headers: Vec<(String, String
     // Configure authentication
     builder = match auth {
         AuthType::BearerToken(token) => builder.with_bearer_auth(&token)?,
-        AuthType::ApiKey { header_name, key } => builder.with_header(&header_name, &key)?,
     };
 
     // Add any additional headers
@@ -405,13 +403,12 @@ mod tests {
 
     #[test]
     fn test_create_llm_client_with_api_key() {
-        let header_name = "X-API-Key";
-        let key = "test_api_key";
-        let auth = AuthType::ApiKey {
-            header_name: header_name.to_string(),
-            key: key.to_string()
-        };
-        let result = create_llm_client(auth, vec![]);
+        // Use the BearerToken instead since ApiKey variant was removed
+        let auth = AuthType::BearerToken("test_api_key".to_string());
+        // Add the header directly in the additional_headers
+        let result = create_llm_client(auth, vec![
+            ("X-API-Key".to_string(), "test_api_key".to_string())
+        ]);
 
         assert!(result.is_ok());
         // We can verify the client was created successfully

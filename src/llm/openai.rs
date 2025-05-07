@@ -90,7 +90,6 @@ impl OpenAILlm {
         // Create the async-openai client - it automatically reads OPENAI_API_KEY
         // from the environment, so no need to handle that manually
         let client = Client::new();
-        
         Ok(Self {
             config,
             client,
@@ -160,34 +159,28 @@ mod tests {
         assert_eq!(OpenAIModelType::from_str("gpt4").unwrap(), OpenAIModelType::GPT4Turbo);
         assert_eq!(OpenAIModelType::from_str("gpt4-turbo").unwrap(), OpenAIModelType::GPT4Turbo);
         assert_eq!(OpenAIModelType::from_str("gpt4o").unwrap(), OpenAIModelType::GPT4O);
-        
         // Test case insensitivity
         assert_eq!(OpenAIModelType::from_str("GPT4").unwrap(), OpenAIModelType::GPT4Turbo);
         assert_eq!(OpenAIModelType::from_str("GPT4O").unwrap(), OpenAIModelType::GPT4O);
-        
         // Test invalid model
         assert!(OpenAIModelType::from_str("invalid_model").is_err());
     }
-    
     #[test]
     fn test_openai_model_name() {
         assert_eq!(OpenAIModelType::GPT4Turbo.model_name(), "gpt-4-turbo-2024-04-09");
         assert_eq!(OpenAIModelType::GPT4O.model_name(), "gpt-4o-2024-05-13");
     }
-    
     #[test]
     fn test_openai_config_from_json() {
         // Test default config
         let config = OpenAIConfig::from_json(None).unwrap();
         assert_eq!(config.model_type, OpenAIModelType::default_model());
-        
         // Test custom config
         let json = json!({
             "model_type": "gpt4-turbo",
             "temperature": 0.7,
             "max_tokens": 2000
         });
-        
         let config = OpenAIConfig::from_json(Some(json)).unwrap();
         assert_eq!(config.model_type, OpenAIModelType::GPT4Turbo);
         assert_eq!(config.base.temperature, 0.7);

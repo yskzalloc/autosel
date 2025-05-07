@@ -3,11 +3,11 @@
 
 use async_trait::async_trait;
 use serde_json::Value;
+use std::env;
+use anthropic_sdk::Client;
 
-use crate::http::AuthType;
-use crate::llm::{Llm, LlmError, ResponseExtractor, ClaudeResponse, ModelType};
+use crate::llm::{Llm, LlmError, ModelType};
 use crate::llm::provider::{LlmConfig, BaseLlmConfig};
-use crate::llm::client::{LlmClient, ConfigHelper};
 use crate::llm::claude_model::ClaudeModelType;
 
 /// Claude configuration
@@ -53,97 +53,49 @@ impl LlmConfig for ClaudeConfig {
     }
 }
 
-/// Claude implementation
+/// Claude implementation using the Anthropic SDK
 pub struct ClaudeLlm {
     config: ClaudeConfig,
-    client: reqwest::Client,
+    api_key: String,
 }
 
 impl ClaudeLlm {
     pub fn new(config: ClaudeConfig) -> Result<Self, LlmError> {
-        let temp = Self {
-            config: config.clone(),
-            client: reqwest::Client::new(),
-        };
-
-        // Initialize the client with proper credentials
-        let client = temp.get_http_client()?;
-
-        // Return the fully initialized instance
+        let api_key = env::var("ANTHROPIC_API_KEY")
+            .map_err(|_| LlmError::Config("ANTHROPIC_API_KEY environment variable not set".to_string()))?;
         Ok(Self {
             config,
-            client,
+            api_key,
         })
-    }
-}
-
-// Implementation of the ConfigHelper trait
-impl crate::llm::client::ConfigHelper for ClaudeLlm {
-    fn base_config(&self) -> &crate::llm::provider::BaseLlmConfig {
-        &self.config.base
-    }
-}
-
-
-#[async_trait]
-impl LlmClient for ClaudeLlm {
-    fn api_key_env_var(&self) -> &str {
-        "ANTHROPIC_API_KEY"
-    }
-
-    fn create_auth(&self, api_key: String) -> AuthType {
-        AuthType::ApiKey {
-            header_name: "x-api-key".to_string(),
-            key: api_key
-        }
-    }
-
-    fn custom_headers(&self) -> Vec<(String, String)> {
-        vec![
-            ("anthropic-version".to_string(), "2023-06-01".to_string())
-        ]
-    }
-
-    fn api_url(&self) -> &str {
-        "https://api.anthropic.com/v1/messages"
-    }
-
-    fn model_name(&self) -> String {
-        self.config.model_type.model_name()
-    }
-
-    // Use the helper trait methods for these common properties
-    fn temperature(&self) -> f32 {
-        self.get_temperature()
-    }
-
-    fn max_tokens(&self) -> usize {
-        self.get_max_tokens()
-    }
-
-    fn debug_logging(&self) -> bool {
-        self.get_debug_logging()
-    }
-
-    fn max_retries(&self) -> usize {
-        self.get_max_retries()
-    }
-
-    fn initial_backoff_ms(&self) -> u64 {
-        self.get_initial_backoff_ms()
     }
 }
 
 #[async_trait]
 impl Llm for ClaudeLlm {
     async fn invoke(&self, prompt: &str) -> Result<String, LlmError> {
-        // Create the request using the base implementation
-        let request = self.create_request(prompt);
-
-        // Send the request and get the response
-        let response: ClaudeResponse = self.send_request(&self.client, &request).await?;
-
-        // Extract the text using the response extractor trait
-        response.extract_text()
+        // Debug logging can be added here if needed
+        // Create a new client for this request
+        let client = Client::new()
+            .auth(&self.api_key)
+            .model(&self.config.model_type.model_name())
+            .temperature(self.config.base.temperature)
+            .max_tokens(self.config.base.max_tokens as i32)
+            .system("")
+            .messages(&serde_json::json!([{
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}]
+            }]));
+        // Get a response using the Request's execute method
+        let mut result = String::new();
+        let request = client.build()
+            .map_err(|e| LlmError::Config(format!("Failed to build Claude request: {}", e)))?;
+        // Use the execute method with a callback that captures the response
+        request.execute(|chunk| {
+            result = chunk;
+            async {}
+        })
+        .await
+        .map_err(|e| LlmError::Api(format!("Claude API error: {}", e)))?;
+        Ok(result)
     }
 }
