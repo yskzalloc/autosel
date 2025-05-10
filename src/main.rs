@@ -8,20 +8,16 @@ use std::path::Path;
 use std::fs;
 use indicatif::{ProgressBar, ProgressStyle};
 
-mod embeddings;
-mod vectorstore;
-mod llm;
-mod models;
+// Internal modules
 mod collector;
 mod classifier;
 mod utils;
-mod http;
 
+// Import from commit-classifier library
+use commit_classifier::ProviderResult;
 use collector::BackportDataCollector;
 use classifier::BackportClassifier;
 use utils::setup_logging;
-use models::ProviderResult;
-
 
 fn main() {
     let matches = App::new("Linux Kernel Backport Classifier")

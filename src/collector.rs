@@ -12,7 +12,8 @@ use regex::Regex;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-use crate::models::CommitFeatures;
+// Import from the commit-classifier library
+use commit_classifier::CommitFeatures;
 
 pub struct BackportDataCollector {
     pub kernel_repo_path: PathBuf,
