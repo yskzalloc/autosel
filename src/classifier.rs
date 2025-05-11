@@ -171,12 +171,12 @@ impl BackportClassifier {
             commit_context.push(files_text);
 
             // Mark backport status prominently
-            let backport_status = if commit.was_backported == Some(true) { "YES" } else { "NO" };
+            let backport_status = if commit.was_selected == Some(true) { "YES" } else { "NO" };
             let text = format!("[Backport Status: {}]\n\n{}", backport_status, commit_context.join("\n\n"));
 
             // Create metadata
             let mut metadata = HashMap::new();
-            metadata.insert("was_backported".to_string(), backport_status.to_string());
+            metadata.insert("was_selected".to_string(), backport_status.to_string());
             metadata.insert("sha".to_string(), commit.sha.clone());
             metadata.insert("date".to_string(), commit.date.to_rfc3339());
 
@@ -271,7 +271,7 @@ impl BackportClassifier {
 
         // Count backported vs non-backported
         let backported_count = commit_dataset.iter()
-            .filter(|c| c.was_backported == Some(true))
+            .filter(|c| c.was_selected == Some(true))
             .count();
 
         info!("Training complete - indexed {} commits ({} backported, {} non-backported)",
@@ -461,7 +461,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                 scored_docs.into_iter()
                     .map(|scored_doc| {
                         let doc_text = scored_doc.document.text;
-                        let was_backported = scored_doc.document.metadata.extra.get("was_backported")
+                        let was_backported = scored_doc.document.metadata.extra.get("was_selected")
                             .and_then(|v| {
                                 if let serde_json::Value::String(s) = v {
                                     Some(s == "YES")
@@ -611,7 +611,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
         Ok(PredictionResult {
             sha: commit_info.sha.clone(),
             subject: commit_info.message.lines().next().unwrap_or("Unknown").to_string(),
-            should_backport: result.should_backport,
+            should_select: result.should_select,
             vote_ratio: result.vote_ratio,
             provider_results: result.provider_results,
         })
@@ -727,7 +727,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                 match self.invoke_llm_with_retry(llm_ref, prompt, provider, verbose).await {
                     Ok((should_backport, explanation, response)) => {
                         results.insert(provider.clone(), ProviderResult {
-                            should_backport,
+                            should_select: should_backport,
                             explanation,
                             error: None,
                             raw_response: Some(response),
@@ -738,7 +738,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                     },
                     Err(e) => {
                         results.insert(provider.clone(), ProviderResult {
-                            should_backport: false,
+                            should_select: false,
                             explanation: "".to_string(),
                             error: Some(e),
                             raw_response: None,
@@ -750,13 +750,13 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
 
         // Calculate the consensus result
         let consensus_threshold = (provider_count + 1) / 2; // This rounds up for odd numbers
-        let consensus_should_backport = should_backport_votes >= consensus_threshold;
+        let consensus_should_select = should_backport_votes >= consensus_threshold;
 
         // Return a generic prediction result (will be enhanced by specific methods)
         Ok(PredictionResult {
             sha: "".to_string(), // Will be overridden by the calling method
             subject: "".to_string(), // Will be overridden by the calling method
-            should_backport: consensus_should_backport,
+            should_select: consensus_should_select,
             vote_ratio: format!("{}/{}", should_backport_votes, provider_count),
             provider_results: results,
         })
@@ -783,7 +783,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
         Ok(PredictionResult {
             sha: "custom_prompt".to_string(),
             subject: "Custom prompt".to_string(),
-            should_backport: result.should_backport,
+            should_select: result.should_select,
             vote_ratio: result.vote_ratio,
             provider_results: result.provider_results,
         })

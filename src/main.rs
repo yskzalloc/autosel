@@ -182,7 +182,7 @@ fn main() {
             max_non_backported
         );
 
-        let backported_count = dataset.iter().filter(|c| c.was_backported == Some(true)).count();
+        let backported_count = dataset.iter().filter(|c| c.was_selected == Some(true)).count();
         info!("Dataset built with {} total commits:", dataset.len());
         info!("  - {} backported commits", backported_count);
         info!("  - {} non-backported commits", dataset.len() - backported_count);
@@ -380,7 +380,7 @@ fn main() {
                     match runtime.block_on(classifier.predict(&features, verbose)) {
                         Ok(result) => {
                             if batch_mode {
-                                let decision = if result.should_backport { "yes" } else { "no" };
+                                let decision = if result.should_select { "yes" } else { "no" };
                                 println!("{} {}", sha, decision);
 
                                 if let Some(dir) = explanation_dir {
@@ -436,15 +436,15 @@ fn main() {
             } else {
                 for (sha, result) in &results {
                     let subject = &result.subject;
-                    let should_backport = result.should_backport;
+                    let should_select = result.should_select;
                     let vote_ratio = &result.vote_ratio;
 
-                    let status = if should_backport { "BACKPORT" } else { "DO NOT BACKPORT" };
+                    let status = if should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
                     info!("Commit {}: {} (Votes: {}) - {}", &sha[0..10], status, vote_ratio, subject);
 
                     if verbose {
                         for (provider, provider_result) in &result.provider_results {
-                            let provider_decision = if provider_result.should_backport { "BACKPORT" } else { "DO NOT BACKPORT" };
+                            let provider_decision = if provider_result.should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
                             info!("  - {}: {}", provider, provider_decision);
 
                             if let Some(error) = &provider_result.error {
@@ -585,14 +585,14 @@ fn main() {
         match runtime.block_on(classifier.process_custom_prompt(&prompt, verbose)) {
             Ok(result) => {
                 if batch_mode {
-                    let decision = if result.should_backport { "yes" } else { "no" };
+                    let decision = if result.should_select { "yes" } else { "no" };
                     println!("{} {}", file_stem, decision);
 
                     if let Some(dir) = explanation_dir {
                         save_explanation(dir, file_stem, &result.provider_results);
                     }
                 } else {
-                    let status = if result.should_backport { "BACKPORT" } else { "DO NOT BACKPORT" };
+                    let status = if result.should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
                     info!("Result: {} (Votes: {})", status, &result.vote_ratio);
 
                     if verbose {
@@ -666,7 +666,7 @@ fn save_explanation(dir: &str, file_stem: &str, provider_results: &HashMap<Strin
 
 fn print_provider_details(provider_results: &HashMap<String, ProviderResult>) {
     for (provider, provider_result) in provider_results {
-        let provider_decision = if provider_result.should_backport { "BACKPORT" } else { "DO NOT BACKPORT" };
+        let provider_decision = if provider_result.should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
         info!("  - {}: {}", provider, provider_decision);
 
         if let Some(error) = &provider_result.error {

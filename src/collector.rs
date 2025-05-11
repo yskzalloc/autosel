@@ -218,7 +218,7 @@ impl BackportDataCollector {
             author: author_name,
             date: datetime,
             files_changed,
-            was_backported: None,
+            was_selected: None,
             upstream_sha: None,
         })
     }
@@ -345,7 +345,7 @@ impl BackportDataCollector {
 
                 match features {
                     Some(mut features) => {
-                        features.was_backported = Some(true);
+                        features.was_selected = Some(true);
                         features.upstream_sha = Some(features.sha.clone());
                         Some(features)
                     },
@@ -478,7 +478,7 @@ impl BackportDataCollector {
 
                         match features {
                             Some(mut features) => {
-                                features.was_backported = Some(false);
+                                features.was_selected = Some(false);
                                 Some(features)
                             },
                             None => None
@@ -494,7 +494,7 @@ impl BackportDataCollector {
                 info!("Final dataset: {} total unique commits", all_commits.len());
 
                 let backported_count = all_commits.iter()
-                    .filter(|c| c.was_backported == Some(true))
+                    .filter(|c| c.was_selected == Some(true))
                     .count();
 
                 info!("  - Backported commits: {} (skipped {} duplicates)",
@@ -587,7 +587,7 @@ mod tests {
                 author: "Author 1".to_string(),
                 date,
                 files_changed: vec!["file1.c".to_string()],
-                was_backported: Some(true),
+                was_selected: Some(true),
                 upstream_sha: None,
             },
             // Duplicate commit with same message but different SHA
@@ -598,7 +598,7 @@ mod tests {
                 author: "Author 2".to_string(),
                 date,
                 files_changed: vec!["file2.c".to_string()],
-                was_backported: Some(false),
+                was_selected: Some(false),
                 upstream_sha: None,
             },
             // Unique commit
@@ -609,7 +609,7 @@ mod tests {
                 author: "Author 3".to_string(),
                 date,
                 files_changed: vec!["file3.c".to_string()],
-                was_backported: Some(true),
+                was_selected: Some(true),
                 upstream_sha: None,
             },
         ];
