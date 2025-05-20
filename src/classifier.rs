@@ -57,8 +57,8 @@ impl BackportClassifier {
         BackportClassifier {
             embeddings: HuggingFaceEmbeddings::new(),
             vectorstore: None,
-            persist_directory: persist_directory.map(|p| p.to_path_buf()),
-            repo_path: repo_path.map(|p| p.to_path_buf()),
+            persist_directory: persist_directory.map(std::path::Path::to_path_buf),
+            repo_path: repo_path.map(std::path::Path::to_path_buf),
             llm_providers,
             llm_configs: final_configs,
             llms: None,
@@ -104,7 +104,7 @@ impl BackportClassifier {
         configs
     }
 
-    /// Creates a new BackportClassifier instance optimized for processing prompts
+    /// Creates a new `BackportClassifier` instance optimized for processing prompts
     /// This is a lighter version that doesn't require a vectorstore
     pub fn new_for_prompt(
         llm_providers: Vec<String>,
@@ -115,14 +115,17 @@ impl BackportClassifier {
         Self::new(llm_providers, llm_configs, None, repo_path)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn train(&mut self, commit_dataset: &[CommitFeatures]) -> Result<(), String> {
+        const BATCH_SIZE: usize = 1000;
+
         info!("Training classifier with {} commits", commit_dataset.len());
 
         // Process dataset into texts and metadata for vectorstore
         let mut texts = Vec::new();
         let mut metadatas = Vec::new();
 
-        let max_chunk_length = 100000; // Characters
+        let max_chunk_length = 100_000; // Characters
 
         let pb = ProgressBar::new(commit_dataset.len() as u64);
         pb.set_style(ProgressStyle::default_bar()
@@ -131,7 +134,7 @@ impl BackportClassifier {
 
         for commit in commit_dataset {
             let message_lines: Vec<&str> = commit.message.trim().lines().collect();
-            let subject = message_lines.first().unwrap_or(&"").to_string();
+            let subject = (*message_lines.first().unwrap_or(&"")).to_string();
             let message_body = if message_lines.len() > 1 {
                 message_lines[1..].join("\n")
             } else {
@@ -141,31 +144,31 @@ impl BackportClassifier {
             // Build rich context for each commit
             let mut commit_context = Vec::new();
 
-            commit_context.push(format!("Subject: {}", subject));
-            commit_context.push(format!("Commit Message:\n{}", message_body));
+            commit_context.push(format!("Subject: {subject}"));
+            commit_context.push(format!("Commit Message:\n{message_body}"));
 
             // Add code changes
             let diff_text = if commit.diff.len() > max_chunk_length {
                 let truncated = commit.diff.chars().take(max_chunk_length).collect::<String>();
                 warn!("Truncating large diff for commit {} (size: {})", commit.sha, commit.diff.len());
-                format!("{}\n[... truncated due to size ...]", truncated)
+                format!("{truncated}\n[... truncated due to size ...]")
             } else {
                 commit.diff.clone()
             };
 
-            commit_context.push(format!("Changes:\n{}", diff_text));
+            commit_context.push(format!("Changes:\n{diff_text}"));
 
             // Add files changed
-            let files_text = if !commit.files_changed.is_empty() {
+            let files_text = if commit.files_changed.is_empty() {
+                "Files: [none]".to_string()
+            } else {
                 let displayed_files = if commit.files_changed.len() > 5 {
                     let joined = commit.files_changed[0..5].join(", ");
                     format!("{} and {} more", joined, commit.files_changed.len() - 5)
                 } else {
                     commit.files_changed.join(", ")
                 };
-                format!("Files: {}", displayed_files)
-            } else {
-                "Files: [none]".to_string()
+                format!("Files: {displayed_files}")
             };
 
             commit_context.push(files_text);
@@ -207,11 +210,10 @@ impl BackportClassifier {
 
         // Initialize embeddings
         if let Err(e) = self.embeddings.initialize() {
-            return Err(format!("Failed to initialize embeddings: {}", e));
+            return Err(format!("Failed to initialize embeddings: {e}"));
         }
 
         // Process in reasonable batches
-        const BATCH_SIZE: usize = 1000;
         let mut start_idx = 0;
 
         if self.vectorstore.is_none() {
@@ -220,7 +222,7 @@ impl BackportClassifier {
             let batch_texts = texts[..batch_size].to_vec();
             let batch_metadatas = metadatas[..batch_size].to_vec();
 
-            info!("Creating vectorstore with initial {} items", batch_size);
+            info!("Creating vectorstore with initial {batch_size} items");
 
             self.vectorstore = match ChromaStore::from_texts(
                 &batch_texts,
@@ -237,7 +239,7 @@ impl BackportClassifier {
                 self.persist_directory.as_deref()
             ) {
                 Ok(vs) => Some(vs),
-                Err(e) => return Err(format!("Failed to create vectorstore: {}", e)),
+                Err(e) => return Err(format!("Failed to create vectorstore: {e}")),
             };
 
             start_idx = batch_size;
@@ -259,7 +261,7 @@ impl BackportClassifier {
 
                 if let Some(vs) = &mut self.vectorstore {
                     if let Err(e) = vs.add_texts(batch_texts, Some(batch_metadatas)) {
-                        warn!("Failed to add batch to vectorstore: {}", e);
+                        warn!("Failed to add batch to vectorstore: {e}");
                     }
                 }
 
@@ -286,7 +288,7 @@ impl BackportClassifier {
             if let Some(persist_dir) = &self.persist_directory {
                 debug!("Saving vectorstore to {}", persist_dir.display());
                 if let Err(e) = vectorstore.persist(persist_dir) {
-                    return Err(format!("Failed to save vectorstore: {}", e));
+                    return Err(format!("Failed to save vectorstore: {e}"));
                 }
             }
         }
@@ -299,10 +301,10 @@ impl BackportClassifier {
         // Serialize and save
         match serde_json::to_string_pretty(&model_state) {
             Ok(json) => match std::fs::write(model_path, json) {
-                Ok(_) => Ok(()),
-                Err(e) => Err(format!("Failed to write model file: {}", e)),
+                Ok(()) => Ok(()),
+                Err(e) => Err(format!("Failed to write model file: {e}")),
             },
-            Err(e) => Err(format!("Failed to serialize model state: {}", e)),
+            Err(e) => Err(format!("Failed to serialize model state: {e}")),
         }
     }
 
@@ -311,9 +313,9 @@ impl BackportClassifier {
         let model_state: ModelState = match std::fs::read_to_string(model_path) {
             Ok(contents) => match serde_json::from_str(&contents) {
                 Ok(state) => state,
-                Err(e) => return Err(format!("Failed to parse model state: {}", e)),
+                Err(e) => return Err(format!("Failed to parse model state: {e}")),
             },
-            Err(e) => return Err(format!("Failed to read model file: {}", e)),
+            Err(e) => return Err(format!("Failed to read model file: {e}")),
         };
 
         // Set persist directory from model state
@@ -343,21 +345,21 @@ impl BackportClassifier {
             info!("Loading vectorstore from {}", persist_dir.display());
             match ChromaStore::load(persist_dir, classifier.embeddings.clone()) {
                 Ok(vs) => classifier.vectorstore = Some(vs),
-                Err(e) => return Err(format!("Failed to load vectorstore: {}", e)),
+                Err(e) => return Err(format!("Failed to load vectorstore: {e}")),
             }
         }
 
         Ok(classifier)
     }
 
-    pub fn format_commit_info(&self, commit_info: &CommitFeatures) -> String {
+    pub fn format_commit_info(commit_info: &CommitFeatures) -> String {
         let mut commit_parts = Vec::new();
 
         // Extract subject (first line of commit message)
-        let message_lines: Vec<&str> = commit_info.message.trim().split('\n').collect();
-        let subject = message_lines.first().unwrap_or(&"No subject").to_string();
+        let message_lines: Vec<&str> = commit_info.message.lines().collect();
+        let subject = (*message_lines.first().unwrap_or(&"No subject")).to_string();
 
-        commit_parts.push(format!("Subject: {}", subject));
+        commit_parts.push(format!("Subject: {subject}"));
         commit_parts.push(format!("Commit Message:\n{}", commit_info.message));
 
         // Add code changes
@@ -369,21 +371,22 @@ impl BackportClassifier {
         if !commit_info.files_changed.is_empty() {
             let mut files_text = commit_info.files_changed.iter()
                 .take(10)
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<String>>()
                 .join(", ");
 
             if commit_info.files_changed.len() > 10 {
-                files_text.push_str(&format!(" and {} more", commit_info.files_changed.len() - 10));
+                use std::fmt::Write;
+                write!(files_text, " and {} more", commit_info.files_changed.len() - 10).unwrap();
             }
 
-            commit_parts.push(format!("Files Changed: {}", files_text));
+            commit_parts.push(format!("Files Changed: {files_text}"));
         }
 
         commit_parts.join("\n\n")
     }
 
-    pub fn construct_prompt(&self, commit_text: &str, similar_commits: Vec<(String, bool)>) -> String {
+    pub fn construct_prompt(commit_text: &str, similar_commits: &[(String, bool)]) -> String {
         // Template for the prompt
         let prompt_template = r#"You are a Linux kernel expert analyzing commits to determine if they should be backported to stable kernel trees.
 Analyze both the commit message and the code changes carefully to identify if this commit is suitable for backporting.
@@ -475,7 +478,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                     .collect()
             },
             Err(e) => {
-                error!("Error performing similarity search: {}", e);
+                error!("Error performing similarity search: {e}");
                 Vec::new()
             }
         }
@@ -492,7 +495,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                         llms.insert(provider.clone(), llm);
                     },
                     Err(e) => {
-                        return Err(format!("Failed to initialize {} LLM: {}", provider, e));
+                        return Err(format!("Failed to initialize {provider} LLM: {e}"));
                     }
                 }
             }
@@ -521,8 +524,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                     let trimmed_response = response.trim().to_lowercase();
                     if trimmed_response == "yes" && retry_count < max_retries {
                         retry_count += 1;
-                        warn!("Received bare 'yes' response from {} LLM, retrying ({}/{})",
-                              provider, retry_count, max_retries);
+                        warn!("Received bare 'yes' response from {provider} LLM, retrying ({retry_count}/{max_retries})");
 
                         // Wait a bit before retrying
                         tokio::time::sleep(std::time::Duration::from_millis(1000 * retry_count)).await;
@@ -532,11 +534,11 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                     // Show full response when verbose is enabled
                     if verbose {
                         info!("===== FULL RESPONSE FROM {} =====", provider.to_uppercase());
-                        info!("{}", response);
+                        info!("{response}");
                         info!("==========================================");
                     }
 
-                    let (should_backport, explanation) = self.parse_llm_response(&response);
+                    let (should_backport, explanation) = Self::parse_llm_response(&response);
                     return Ok((should_backport, explanation, response));
                 },
                 Err(e) => {
@@ -548,11 +550,9 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
 
                         // Log specific error types differently
                         if err_str.contains("Failed to parse response: EOF while parsing a value at line 1 column 0") {
-                            warn!("Encountered EOF parsing error with {} LLM, retrying ({}/{})",
-                                  provider, retry_count, max_retries);
+                            warn!("Encountered EOF parsing error with {provider} LLM, retrying ({retry_count}/{max_retries})");
                         } else {
-                            warn!("Error invoking {} LLM: {}, retrying ({}/{})",
-                                  provider, err_str, retry_count, max_retries);
+                            warn!("Error invoking {provider} LLM: {err_str}, retrying ({retry_count}/{max_retries})");
                         }
 
                         // Wait a bit before retrying with exponential backoff
@@ -562,8 +562,8 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                     }
 
                     // We've exhausted all retries
-                    error!("Error invoking {} LLM after {} retries: {}", provider, max_retries, err_str);
-                    return Err(format!("Error: {}", err_str));
+                    error!("Error invoking {provider} LLM after {max_retries} retries: {err_str}");
+                    return Err(format!("Error: {err_str}"));
                 }
             }
         }
@@ -581,25 +581,25 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
         if !self.embeddings.is_initialized() {
             info!("Initializing embeddings model for prediction");
             if let Err(e) = self.embeddings.initialize() {
-                return Err(format!("Failed to initialize embeddings model: {}", e));
+                return Err(format!("Failed to initialize embeddings model: {e}"));
             }
         }
 
         // Generate the vector database search for context
-        let commit_text = self.format_commit_info(commit_info);
+        let commit_text = Self::format_commit_info(commit_info);
 
         // Get similar commits for context
         let similar_commits = self.find_similar_commits(&commit_text, 5);
 
         // Construct prompt with context and commit info
-        let prompt = self.construct_prompt(&commit_text, similar_commits);
+        let prompt = Self::construct_prompt(&commit_text, &similar_commits);
 
         // Show full prompt when verbose is enabled
         if verbose {
             info!("===== FULL PROMPT =====");
             // Print each line without extra indentation
             for line in prompt.lines() {
-                info!("{}", line);
+                info!("{line}");
             }
             info!("=======================");
         }
@@ -618,7 +618,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
     }
 
     // Parse LLM response to extract decision and explanation
-    pub fn parse_llm_response(&self, response: &str) -> (bool, String) {
+    pub fn parse_llm_response(response: &str) -> (bool, String) {
         // First, filter out any content inside <think> blocks
         let filtered_response = if response.contains("<think>") && response.contains("</think>") {
             // Extract content outside of think blocks
@@ -648,7 +648,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
 
         // If we got an error message back
         if filtered_response.starts_with("Error:") {
-            return (false, format!("LLM Error: {}", filtered_response));
+            return (false, format!("LLM Error: {filtered_response}"));
         }
 
         // If response starts with NO: (very common pattern)
@@ -733,13 +733,13 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
                             raw_response: Some(response),
                         });
 
-                        should_backport_votes += if should_backport { 1 } else { 0 };
+                        should_backport_votes += i32::from(should_backport);
                         provider_count += 1;
                     },
                     Err(e) => {
                         results.insert(provider.clone(), ProviderResult {
                             should_select: false,
-                            explanation: "".to_string(),
+                            explanation: String::new(),
                             error: Some(e),
                             raw_response: None,
                         });
@@ -754,10 +754,10 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
 
         // Return a generic prediction result (will be enhanced by specific methods)
         Ok(PredictionResult {
-            sha: "".to_string(), // Will be overridden by the calling method
-            subject: "".to_string(), // Will be overridden by the calling method
+            sha: String::new(), // Will be overridden by the calling method
+            subject: String::new(), // Will be overridden by the calling method
             should_select: consensus_should_select,
-            vote_ratio: format!("{}/{}", should_backport_votes, provider_count),
+            vote_ratio: format!("{should_backport_votes}/{provider_count}"),
             provider_results: results,
         })
     }
@@ -771,7 +771,7 @@ Provide your answer as YES or NO, followed by a brief explanation that reference
             info!("===== CUSTOM PROMPT =====");
             // Print each line without extra indentation
             for line in prompt.lines() {
-                info!("{}", line);
+                info!("{line}");
             }
             info!("=======================");
         }

@@ -31,10 +31,10 @@ impl BackportDataCollector {
             Ok(output) => {
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(format!("Not a valid git repository: {}", stderr));
+                    return Err(format!("Not a valid git repository: {stderr}"));
                 }
             },
-            Err(e) => return Err(format!("Failed to verify git repository: {}", e)),
+            Err(e) => return Err(format!("Failed to verify git repository: {e}")),
         }
 
         Ok(BackportDataCollector {
@@ -85,7 +85,7 @@ impl BackportDataCollector {
             if version_parts.len() >= 2 {
                 if let (Ok(major), Ok(minor)) = (version_parts[0].parse::<i32>(), version_parts[1].parse::<i32>()) {
                     if major < 4 || (major == 4 && minor < 4) {
-                        debug!("Skipping {} - older than linux-4.4.y", branch);
+                        debug!("Skipping {branch} - older than linux-4.4.y");
                         skipped_branches += 1;
                         continue;
                     }
@@ -104,13 +104,7 @@ impl BackportDataCollector {
 
         let per_branch_commits: Vec<HashSet<String>> = filtered_branches.par_iter()
             .map(|branch| {
-                let result = match self.process_branch(branch) {
-                    Ok(branch_backported) => branch_backported,
-                    Err(e) => {
-                        error!("Error processing branch {}: {}", branch, e);
-                        HashSet::new()
-                    }
-                };
+                let result = self.process_branch(branch);
                 pb.inc(1);
                 result
             })
@@ -128,16 +122,16 @@ impl BackportDataCollector {
         backported_commits
     }
 
-    fn process_branch(&self, branch: &str) -> Result<HashSet<String>, String> {
+    fn process_branch(&self, branch: &str) -> HashSet<String> {
         let mut branch_backported = HashSet::new();
 
         let output = self.safe_git_command(&["merge-base", "origin/master", branch]);
         let merge_base = match output {
             Some(base) => base.trim().to_string(),
-            None => return Ok(branch_backported),
+            None => return branch_backported,
         };
 
-        let merge_range = format!("{}..{}", merge_base, branch);
+        let merge_range = format!("{merge_base}..{branch}");
         let cmd = vec!["rev-list", "--no-merges", &merge_range];
         let output = self.safe_git_command(&cmd);
 
@@ -145,10 +139,10 @@ impl BackportDataCollector {
             Some(commits) => {
                 commits.lines()
                     .filter(|line| !line.is_empty())
-                    .map(|line| line.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<String>>()
             },
-            None => return Ok(branch_backported),
+            None => return branch_backported,
         };
 
         for commit_sha in stable_commits {
@@ -157,7 +151,7 @@ impl BackportDataCollector {
             }
         }
 
-        Ok(branch_backported)
+        branch_backported
     }
 
     fn get_upstream_commit_sha(&self, stable_commit_sha: &str) -> Option<String> {
@@ -208,7 +202,7 @@ impl BackportDataCollector {
         let files_changed: Vec<String> = files_output
             .lines()
             .filter(|line| !line.is_empty())
-            .map(|line| line.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
 
         Some(CommitFeatures {
@@ -235,7 +229,7 @@ impl BackportDataCollector {
                     match String::from_utf8(output.stdout) {
                         Ok(stdout) => Some(stdout),
                         Err(e) => {
-                            warn!("Failed to decode git command output: {}", e);
+                            warn!("Failed to decode git command output: {e}");
                             None
                         }
                     }
@@ -293,6 +287,7 @@ impl BackportDataCollector {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn build_dataset(&mut self, max_workers: usize,
                max_backported: Option<usize>, max_non_backported: Option<usize>) -> Vec<CommitFeatures> {
         // Configure the thread pool with the specified number of workers
@@ -315,7 +310,7 @@ impl BackportDataCollector {
         // If in test mode, limit the number of backported commits
         let backported_list: Vec<String> = match max_backported {
             Some(limit) if limit < backported_commits.len() => {
-                info!("Limiting backported commits to {} for testing", limit);
+                info!("Limiting backported commits to {limit} for testing");
                 backported_commits.iter().take(limit).cloned().collect()
             },
             _ => backported_commits.iter().cloned().collect()
@@ -369,8 +364,8 @@ impl BackportDataCollector {
         let newest_date_str = newest_date.format("%Y-%m-%d").to_string();
 
         // Get all non-merge commits in the date range
-        let since_str = format!("--since={}", oldest_date);
-        let until_str = format!("--until={}", newest_date_str);
+        let since_str = format!("--since={oldest_date}");
+        let until_str = format!("--until={newest_date_str}");
 
         let cmd = vec![
             "rev-list", "--no-merges",
@@ -383,7 +378,7 @@ impl BackportDataCollector {
             Some(output) => {
                 let all_master_shas: Vec<String> = output.lines()
                     .filter(|line| !line.is_empty())
-                    .map(|line| line.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect();
 
                 info!("Found {} commits in origin/master in the date range", all_master_shas.len());
@@ -394,7 +389,7 @@ impl BackportDataCollector {
                     .collect();
 
                 let non_backported_count = non_backported_shas.len();
-                info!("Found {} non-backported commits", non_backported_count);
+                info!("Found {non_backported_count} non-backported commits");
 
                 // Clear previous deduplication state
                 self.seen_commit_messages.clear();
@@ -453,7 +448,7 @@ impl BackportDataCollector {
                 // Limit non-backported commits if needed
                 let non_backported_list: Vec<String> = match max_non_backported {
                     Some(limit) if limit < unique_non_backported.len() => {
-                        info!("Limiting non-backported commits to {} for testing", limit);
+                        info!("Limiting non-backported commits to {limit} for testing");
                         unique_non_backported.into_iter().take(limit).collect()
                     },
                     _ => unique_non_backported
@@ -517,7 +512,7 @@ mod tests {
 
     // Helper function to create a test commit message
     fn create_test_commit_message(subject: &str, body: &str) -> String {
-        format!("{}\n\n{}", subject, body)
+        format!("{subject}\n\n{body}")
     }
 
     #[test]

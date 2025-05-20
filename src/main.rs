@@ -19,6 +19,7 @@ use collector::BackportDataCollector;
 use classifier::BackportClassifier;
 use utils::setup_logging;
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let matches = App::new("Linux Kernel Backport Classifier")
         .version("0.1.0")
@@ -121,7 +122,7 @@ fn main() {
     let model_dir_path = Path::new(model_dir);
     if !model_dir_path.exists() {
         if let Err(e) = fs::create_dir_all(model_dir_path) {
-            error!("Failed to create model directory: {}", e);
+            error!("Failed to create model directory: {e}");
             std::process::exit(1);
         }
     }
@@ -129,7 +130,7 @@ fn main() {
     let vectorstore_dir = model_dir_path.join("vectorstore");
     if !vectorstore_dir.exists() {
         if let Err(e) = fs::create_dir_all(&vectorstore_dir) {
-            error!("Failed to create vectorstore directory: {}", e);
+            error!("Failed to create vectorstore directory: {e}");
             std::process::exit(1);
         }
     }
@@ -143,7 +144,7 @@ fn main() {
     };
 
     if matches.is_present("commit") || matches.is_present("commits") {
-        info!("Using LLM providers: {:?}", llm_providers);
+        info!("Using LLM providers: {llm_providers:?}");
     }
 
     let expanded_kernel_repo = shellexpand::tilde(kernel_repo);
@@ -159,7 +160,7 @@ fn main() {
         let collector = match BackportDataCollector::new(kernel_repo_path) {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to initialize data collector: {}", e);
+                error!("Failed to initialize data collector: {e}");
                 std::process::exit(1);
             }
         };
@@ -184,7 +185,7 @@ fn main() {
 
         let backported_count = dataset.iter().filter(|c| c.was_selected == Some(true)).count();
         info!("Dataset built with {} total commits:", dataset.len());
-        info!("  - {} backported commits", backported_count);
+        info!("  - {backported_count} backported commits");
         info!("  - {} non-backported commits", dataset.len() - backported_count);
 
         info!("Training classifier...");
@@ -197,7 +198,7 @@ fn main() {
         );
 
         if let Err(e) = classifier.train(&dataset) {
-                error!("Failed to train classifier: {}", e);
+                error!("Failed to train classifier: {e}");
             std::process::exit(1);
         }
 
@@ -205,7 +206,7 @@ fn main() {
         info!("Saving model to {}", model_path.display());
 
         if let Err(e) = classifier.save_model(&model_path) {
-            error!("Failed to save model: {}", e);
+            error!("Failed to save model: {e}");
             std::process::exit(1);
         }
 
@@ -225,7 +226,7 @@ fn main() {
         let mut classifier = match BackportClassifier::load_model(&model_path) {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to load model: {}", e);
+                error!("Failed to load model: {e}");
                 std::process::exit(1);
             }
         };
@@ -233,7 +234,7 @@ fn main() {
         classifier.repo_path = Some(kernel_repo_path.to_path_buf());
 
         if matches.is_present("models") {
-            classifier.llm_providers = llm_providers.clone();
+            classifier.llm_providers.clone_from(&llm_providers);
             classifier.llms = None;
 
             // Set debug logging for verbose mode
@@ -310,13 +311,13 @@ fn main() {
             commits_to_analyze.push(commit.to_string());
         }
         if let Some(commits) = matches.values_of("commits") {
-            commits_to_analyze.extend(commits.map(|s| s.to_string()));
+            commits_to_analyze.extend(commits.map(std::string::ToString::to_string));
         }
 
         let collector = match BackportDataCollector::new(kernel_repo_path) {
             Ok(c) => c,
             Err(e) => {
-                error!("Failed to initialize data collector: {}", e);
+                error!("Failed to initialize data collector: {e}");
                 std::process::exit(1);
             }
         };
@@ -335,7 +336,7 @@ fn main() {
 
         for sha in &commits_to_analyze {
             if sha.len() < 6 {
-                warn!("Invalid commit SHA: {} (too short)", sha);
+                warn!("Invalid commit SHA: {sha} (too short)");
                 continue;
             }
 
@@ -345,26 +346,26 @@ fn main() {
                         if !classifier.embeddings.is_initialized() {
                             info!("Initializing embeddings model for prompt generation");
                             if let Err(e) = classifier.embeddings.initialize() {
-                                error!("Failed to initialize embeddings model: {}", e);
+                                error!("Failed to initialize embeddings model: {e}");
                                 continue;
                             }
                         }
 
-                        let commit_text = classifier.format_commit_info(&features);
+                        let commit_text = classifier::BackportClassifier::format_commit_info(&features);
 
                         let similar_commits = classifier.find_similar_commits(&commit_text, 5);
 
-                        let prompt = classifier.construct_prompt(&commit_text, similar_commits);
+                        let prompt = classifier::BackportClassifier::construct_prompt(&commit_text, &similar_commits);
 
                         let prompt_dir_path = Path::new(dir);
                         if !prompt_dir_path.exists() {
                             if let Err(e) = fs::create_dir_all(prompt_dir_path) {
-                                error!("Failed to create prompt directory: {}", e);
+                                error!("Failed to create prompt directory: {e}");
                                 continue;
                             }
                         }
 
-                        let filename = format!("{}.txt", sha);
+                        let filename = format!("{sha}.txt");
                         let filepath = prompt_dir_path.join(&filename);
 
                         if let Err(e) = fs::write(&filepath, prompt) {
@@ -381,23 +382,24 @@ fn main() {
                         Ok(result) => {
                             if batch_mode {
                                 let decision = if result.should_select { "yes" } else { "no" };
-                                println!("{} {}", sha, decision);
+                                println!("{sha} {decision}");
 
                                 if let Some(dir) = explanation_dir {
                                     let explanation_dir_path = Path::new(dir);
 
                                     if !explanation_dir_path.exists() {
                                         if let Err(e) = fs::create_dir_all(explanation_dir_path) {
-                                            error!("Failed to create explanation directory: {}", e);
+                                            error!("Failed to create explanation directory: {e}");
                                         }
                                     }
 
-                                    let filename = format!("{}.txt", sha);
+                                    let filename = format!("{sha}.txt");
                                     let filepath = explanation_dir_path.join(&filename);
 
                                     let mut full_explanation = String::new();
                                     for (provider, provider_result) in &result.provider_results {
-                                        full_explanation.push_str(&format!("Provider: {}\n", provider));
+                                        use std::fmt::Write;
+                                        writeln!(full_explanation, "Provider: {provider}").unwrap();
                                         if let Some(raw_response) = &provider_result.raw_response {
                                             full_explanation.push_str(raw_response);
                                         } else {
@@ -416,12 +418,12 @@ fn main() {
                             results.insert(sha.clone(), result);
                         },
                         Err(e) => {
-                            error!("Failed to get prediction for commit {}: {}", sha, e);
+                            error!("Failed to get prediction for commit {sha}: {e}");
                         }
                     }
                 },
                 None => {
-                    warn!("Failed to get features for commit {}", sha);
+                    warn!("Failed to get features for commit {sha}");
                 }
             }
 
@@ -430,7 +432,9 @@ fn main() {
 
         pb.finish_with_message("Processed commits");
 
-        if !results.is_empty() {
+        if results.is_empty() {
+            warn!("No results to display");
+        } else {
             if batch_mode {
                 // Results already printed as they were processed
             } else {
@@ -445,14 +449,14 @@ fn main() {
                     if verbose {
                         for (provider, provider_result) in &result.provider_results {
                             let provider_decision = if provider_result.should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
-                            info!("  - {}: {}", provider, provider_decision);
+                            info!("  - {provider}: {provider_decision}");
 
                             if let Some(error) = &provider_result.error {
-                                info!("      Error: {}", error);
+                                info!("      Error: {error}");
                             } else {
                                 let explanation_lines: Vec<&str> = provider_result.explanation.lines().take(3).collect();
                                 for line in &explanation_lines {
-                                    info!("      {}", line);
+                                    info!("      {line}");
                                 }
                                 if explanation_lines.len() < provider_result.explanation.lines().count() {
                                     info!("      ...");
@@ -470,15 +474,13 @@ fn main() {
                 match serde_json::to_string_pretty(&results) {
                     Ok(json) => {
                         match fs::write(output_path, json) {
-                            Ok(_) => info!("Results saved successfully"),
-                            Err(e) => error!("Error writing results file: {}", e),
+                            Ok(()) => info!("Results saved successfully"),
+                            Err(e) => error!("Error writing results file: {e}"),
                         }
                     },
-                    Err(e) => error!("Error serializing results: {}", e),
+                    Err(e) => error!("Error serializing results: {e}"),
                 }
             }
-        } else {
-            warn!("No results to display");
         }
     }
 
@@ -576,17 +578,17 @@ fn main() {
         let prompt = match fs::read_to_string(prompt_file_path) {
             Ok(content) => content,
             Err(e) => {
-                error!("Failed to read prompt file {}: {}", prompt_file_path, e);
+                error!("Failed to read prompt file {prompt_file_path}: {e}");
                 std::process::exit(1);
             }
         };
 
-        info!("Processing prompt from {}", prompt_file_path);
+        info!("Processing prompt from {prompt_file_path}");
         match runtime.block_on(classifier.process_custom_prompt(&prompt, verbose)) {
             Ok(result) => {
                 if batch_mode {
                     let decision = if result.should_select { "yes" } else { "no" };
-                    println!("{} {}", file_stem, decision);
+                    println!("{file_stem} {decision}");
 
                     if let Some(dir) = explanation_dir {
                         save_explanation(dir, file_stem, &result.provider_results);
@@ -609,21 +611,21 @@ fn main() {
 
                     if let Err(e) = fs::write(output_path,
                         serde_json::to_string_pretty(&results).unwrap_or_default()) {
-                        error!("Error writing results file: {}", e);
+                        error!("Error writing results file: {e}");
                     } else {
                         info!("Results saved successfully");
                     }
                 }
             },
             Err(e) => {
-                error!("Failed to process prompt: {}", e);
+                error!("Failed to process prompt: {e}");
             }
         }
     }
 
     if matches.is_present("make-prompt") {
         if let Some(dir) = prompt_dir {
-            info!("All prompts saved to directory: {}", dir);
+            info!("All prompts saved to directory: {dir}");
         }
     }
 
@@ -638,17 +640,18 @@ fn save_explanation(dir: &str, file_stem: &str, provider_results: &HashMap<Strin
 
     if !explanation_dir_path.exists() {
         if let Err(e) = fs::create_dir_all(explanation_dir_path) {
-            error!("Failed to create explanation directory: {}", e);
+            error!("Failed to create explanation directory: {e}");
             return;
         }
     }
 
-    let filename = format!("{}.txt", file_stem);
+    let filename = format!("{file_stem}.txt");
     let filepath = explanation_dir_path.join(&filename);
 
     let mut full_explanation = String::new();
     for (provider, provider_result) in provider_results {
-        full_explanation.push_str(&format!("Provider: {}\n", provider));
+        use std::fmt::Write;
+        writeln!(full_explanation, "Provider: {provider}").unwrap();
         if let Some(raw_response) = &provider_result.raw_response {
             full_explanation.push_str(raw_response);
         } else {
@@ -667,14 +670,14 @@ fn save_explanation(dir: &str, file_stem: &str, provider_results: &HashMap<Strin
 fn print_provider_details(provider_results: &HashMap<String, ProviderResult>) {
     for (provider, provider_result) in provider_results {
         let provider_decision = if provider_result.should_select { "BACKPORT" } else { "DO NOT BACKPORT" };
-        info!("  - {}: {}", provider, provider_decision);
+        info!("  - {provider}: {provider_decision}");
 
         if let Some(error) = &provider_result.error {
-            info!("      Error: {}", error);
+            info!("      Error: {error}");
         } else {
             let explanation_lines: Vec<&str> = provider_result.explanation.lines().take(3).collect();
             for line in &explanation_lines {
-                info!("      {}", line);
+                info!("      {line}");
             }
             if explanation_lines.len() < provider_result.explanation.lines().count() {
                 info!("      ...");
