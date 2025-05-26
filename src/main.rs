@@ -405,11 +405,11 @@ fn main() {
                                         use std::fmt::Write;
                                         writeln!(full_explanation, "Provider: {provider}").unwrap();
                                         if let Some(raw_response) = &provider_result.raw_response {
-                                            full_explanation.push_str(raw_response);
+                                            writeln!(full_explanation, "{}", raw_response).unwrap();
                                         } else {
-                                            full_explanation.push_str(&provider_result.explanation);
+                                            writeln!(full_explanation, "{}", provider_result.explanation).unwrap();
                                         }
-                                        full_explanation.push_str("\n\n");
+                                        full_explanation.push('\n');
                                     }
 
                                     if let Err(e) = fs::write(&filepath, full_explanation) {
@@ -657,11 +657,11 @@ fn save_explanation(dir: &str, file_stem: &str, provider_results: &HashMap<Strin
         use std::fmt::Write;
         writeln!(full_explanation, "Provider: {provider}").unwrap();
         if let Some(raw_response) = &provider_result.raw_response {
-            full_explanation.push_str(raw_response);
+            writeln!(full_explanation, "{}", raw_response).unwrap();
         } else {
-            full_explanation.push_str(&provider_result.explanation);
+            writeln!(full_explanation, "{}", provider_result.explanation).unwrap();
         }
-        full_explanation.push_str("\n\n");
+        full_explanation.push('\n');
     }
 
     if let Err(e) = fs::write(&filepath, full_explanation) {
