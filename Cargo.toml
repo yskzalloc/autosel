@@ -12,9 +12,9 @@ cuda = ["commit-classifier/cuda"]
 
 [dependencies]
 commit-classifier = { git = "https://git.sr.ht/~sashal/commit-classifier", default-features = false }
-clap = "2.33"
-git2 = "0.17"
-env_logger = "0.10"
+clap = "4.5"
+git2 = "0.20"
+env_logger = "0.11"
 log = "0.4"
 indicatif = "0.17"
 shellexpand = "3.1"

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 // (c) 2025, Sasha Levin <sashal@kernel.org>
 
-use clap::{App, Arg};
+use clap::{Command, Arg};
 use log::{info, debug, error, warn};
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,103 +21,107 @@ use utils::setup_logging;
 
 #[allow(clippy::too_many_lines)]
 fn main() {
-    let matches = App::new("Linux Kernel Backport Classifier")
+    let matches = Command::new("Linux Kernel Backport Classifier")
         .version("0.1.0")
         .author("Sasha Levin <sashal@kernel.org>")
         .about("Classifies if Linux kernel commits should be backported to stable trees")
-        .arg(Arg::with_name("kernel-repo")
+        .arg(Arg::new("kernel-repo")
             .long("kernel-repo")
             .value_name("PATH")
             .help("Path to the Linux kernel repository")
             .default_value("~/linux")
-            .takes_value(true))
-        .arg(Arg::with_name("model-dir")
+            .num_args(1))
+        .arg(Arg::new("model-dir")
             .long("model-dir")
             .value_name("PATH")
             .help("Path to store the model")
             .default_value("./model")
-            .takes_value(true))
-        .arg(Arg::with_name("models")
+            .num_args(1))
+        .arg(Arg::new("models")
             .long("models")
             .value_name("MODELS")
             .help("Comma-separated list of models to use (claude, openai, nvidia, ollama)")
-            .takes_value(true))
-        .arg(Arg::with_name("train")
+            .num_args(1))
+        .arg(Arg::new("train")
             .long("train")
-            .help("Train the model"))
-        .arg(Arg::with_name("test")
+            .help("Train the model")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("test")
             .long("test")
-            .help("Test mode with limited dataset"))
-        .arg(Arg::with_name("debug")
+            .help("Test mode with limited dataset")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("debug")
             .long("debug")
-            .help("Enable debug logging"))
-        .arg(Arg::with_name("commit")
+            .help("Enable debug logging")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("commit")
             .long("commit")
             .value_name("SHA")
             .help("Commit SHA to analyze")
-            .takes_value(true))
-        .arg(Arg::with_name("commits")
+            .num_args(1))
+        .arg(Arg::new("commits")
             .long("commits")
             .value_name("SHAs")
             .help("List of commit SHAs to analyze")
-            .multiple(true)
-            .takes_value(true))
-        .arg(Arg::with_name("output")
+            .num_args(1..)
+            .action(clap::ArgAction::Append))
+        .arg(Arg::new("output")
             .long("output")
             .value_name("FILE")
             .help("Output file for results (JSON format)")
-            .takes_value(true))
-        .arg(Arg::with_name("verbose")
+            .num_args(1))
+        .arg(Arg::new("verbose")
             .long("verbose")
-            .help("Enable verbose output"))
-        .arg(Arg::with_name("batch")
+            .help("Enable verbose output")
+            .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("batch")
             .long("batch")
             .value_name("EXPLANATION_DIR")
             .help("Output only commit ID and yes/no for each commit. If a directory path is provided, save LLM responses in that directory.")
-            .takes_value(true))
-        .arg(Arg::with_name("make-prompt")
+            .num_args(0..=1))
+        .arg(Arg::new("make-prompt")
             .long("make-prompt")
             .value_name("PROMPT_DIR")
             .help("Only generate LLM prompts for given commits and save them in the provided directory as $sha1.txt")
-            .takes_value(true))
-        .arg(Arg::with_name("send-prompt")
+            .num_args(1))
+        .arg(Arg::new("send-prompt")
             .long("send-prompt")
             .value_name("FILE")
             .help("Skip embeddings initialization and send the prompt in the provided file to the selected LLMs")
-            .takes_value(true))
-        .arg(Arg::with_name("ollama-server")
+            .num_args(1))
+        .arg(Arg::new("ollama-server")
             .long("ollama-server")
             .value_name("URL")
             .help("URL of the Ollama API server (default: http://localhost:11434)")
-            .takes_value(true))
-        .arg(Arg::with_name("ollama-model")
+            .num_args(1))
+        .arg(Arg::new("ollama-model")
             .long("ollama-model")
             .value_name("MODEL")
             .help("Ollama model to use (default: llama3, options: llama3, mistral, gemma, or a custom model name)")
-            .takes_value(true))
-        .arg(Arg::with_name("exec")
+            .num_args(1))
+        .arg(Arg::new("exec")
             .long("exec")
             .value_name("PATH")
             .help("Path to an executable for inference when using 'exec' as a model")
-            .takes_value(true))
-        .arg(Arg::with_name("exec-params")
+            .num_args(1))
+        .arg(Arg::new("exec-params")
             .long("exec-params")
             .value_name("PARAMS")
             .help("Comma-separated list of parameters to pass to the executable")
-            .takes_value(true))
+            .num_args(1))
         .get_matches();
 
-    let batch_mode = matches.is_present("batch");
+    let batch_mode = matches.contains_id("batch");
 
-    setup_logging(matches.is_present("debug"), batch_mode);
+    setup_logging(matches.get_flag("debug"), batch_mode);
 
-    let kernel_repo = matches.value_of("kernel-repo").unwrap();
-    let model_dir = matches.value_of("model-dir").unwrap();
-    let test_mode = matches.is_present("test");
-    let verbose = matches.is_present("verbose");
-    let explanation_dir = matches.value_of("batch");
-    let prompt_dir = matches.value_of("make-prompt");
-    let prompt_file = matches.value_of("send-prompt");
+    let kernel_repo = matches.get_one::<String>("kernel-repo").unwrap();
+    let model_dir = matches.get_one::<String>("model-dir").unwrap();
+    let test_mode = matches.get_flag("test");
+    let verbose = matches.get_flag("verbose");
+    let explanation_dir = matches.get_one::<String>("batch");
+    let prompt_dir = matches.get_one::<String>("make-prompt");
+    let prompt_file = matches.get_one::<String>("send-prompt");
 
     let model_dir_path = Path::new(model_dir);
     if !model_dir_path.exists() {
@@ -135,7 +139,7 @@ fn main() {
         }
     }
 
-    let llm_providers = if let Some(models) = matches.value_of("models") {
+    let llm_providers = if let Some(models) = matches.get_one::<String>("models") {
         models.split(',')
             .map(|s| s.trim().to_string())
             .collect::<Vec<String>>()
@@ -143,7 +147,7 @@ fn main() {
         vec!["claude".to_string()]
     };
 
-    if matches.is_present("commit") || matches.is_present("commits") {
+    if matches.contains_id("commit") || matches.contains_id("commits") {
         info!("Using LLM providers: {llm_providers:?}");
     }
 
@@ -153,7 +157,7 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new()
         .expect("Failed to create tokio runtime");
 
-    if matches.is_present("train") {
+    if matches.get_flag("train") {
         info!("Starting training process...");
 
         debug!("Initializing data collector with kernel repo: {}", kernel_repo_path.display());
@@ -213,7 +217,7 @@ fn main() {
         info!("Training completed successfully");
     }
 
-    if matches.is_present("commit") || matches.is_present("commits") {
+    if matches.contains_id("commit") || matches.contains_id("commits") {
         let model_path = model_dir_path.join("backport_classifier.bin");
 
         if !model_path.exists() {
@@ -233,7 +237,7 @@ fn main() {
 
         classifier.repo_path = Some(kernel_repo_path.to_path_buf());
 
-        if matches.is_present("models") {
+        if matches.contains_id("models") {
             classifier.llm_providers.clone_from(&llm_providers);
             classifier.llms = None;
 
@@ -253,14 +257,14 @@ fn main() {
                 if let Some(config) = classifier.llm_configs.get_mut("ollama") {
                     if let Some(obj) = config.as_object_mut() {
                         // Set Ollama server URL if provided
-                        if let Some(ollama_server) = matches.value_of("ollama-server") {
+                        if let Some(ollama_server) = matches.get_one::<String>("ollama-server") {
                             obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
                         }
 
                         // Set Ollama model if provided
-                        if let Some(ollama_model) = matches.value_of("ollama-model") {
+                        if let Some(ollama_model) = matches.get_one::<String>("ollama-model") {
                             // Check if it's a built-in model or custom
-                            let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model);
+                            let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model.as_str());
 
                             if is_builtin {
                                 obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
@@ -275,7 +279,7 @@ fn main() {
 
             // Configure Exec parameters if provided
             if classifier.llm_providers.contains(&"exec".to_string()) {
-                if let Some(exec_path) = matches.value_of("exec") {
+                if let Some(exec_path) = matches.get_one::<String>("exec") {
                     // Create or get existing config for exec
                     let exec_config = classifier.llm_configs.entry("exec".to_string())
                         .or_insert_with(|| serde_json::json!({}));
@@ -288,7 +292,7 @@ fn main() {
                         obj.insert("debug_logging".to_string(), serde_json::json!(verbose));
 
                         // Parse and set exec parameters if provided
-                        if let Some(exec_params) = matches.value_of("exec-params") {
+                        if let Some(exec_params) = matches.get_one::<String>("exec-params") {
                             let params: Vec<String> = exec_params.split(',')
                                 .map(|s| s.trim().to_string())
                                 .collect();
@@ -307,10 +311,10 @@ fn main() {
         }
 
         let mut commits_to_analyze = Vec::new();
-        if let Some(commit) = matches.value_of("commit") {
+        if let Some(commit) = matches.get_one::<String>("commit") {
             commits_to_analyze.push(commit.to_string());
         }
-        if let Some(commits) = matches.values_of("commits") {
+        if let Some(commits) = matches.get_many::<String>("commits") {
             commits_to_analyze.extend(commits.map(std::string::ToString::to_string));
         }
 
@@ -342,7 +346,7 @@ fn main() {
 
             match collector.get_commit_features(sha) {
                 Some(features) => {
-                    if let Some(dir) = prompt_dir {
+                    if let Some(dir) = prompt_dir.as_deref() {
                         if !classifier.embeddings.is_initialized() {
                             info!("Initializing embeddings model for prompt generation");
                             if let Err(e) = classifier.embeddings.initialize() {
@@ -467,7 +471,7 @@ fn main() {
                 }
             }
 
-            if let Some(output_file) = matches.value_of("output") {
+            if let Some(output_file) = matches.get_one::<String>("output") {
                 let output_path = Path::new(output_file);
                 info!("Saving results to {}", output_path.display());
 
@@ -487,7 +491,7 @@ fn main() {
     if let Some(prompt_file_path) = prompt_file {
         info!("Creating classifier for prompt processing");
 
-        let config = if matches.is_present("models") {
+        let config = if matches.contains_id("models") {
             let mut configs = HashMap::new();
 
             // Set debug logging for verbose mode
@@ -507,14 +511,14 @@ fn main() {
 
                 if let Some(obj) = ollama_config.as_object_mut() {
                     // Set Ollama server URL if provided
-                    if let Some(ollama_server) = matches.value_of("ollama-server") {
+                    if let Some(ollama_server) = matches.get_one::<String>("ollama-server") {
                         obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
                     }
 
                     // Set Ollama model if provided
-                    if let Some(ollama_model) = matches.value_of("ollama-model") {
+                    if let Some(ollama_model) = matches.get_one::<String>("ollama-model") {
                         // Check if it's a built-in model or custom
-                        let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model);
+                        let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model.as_str());
 
                         if is_builtin {
                             obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
@@ -530,7 +534,7 @@ fn main() {
 
             // Configure Exec parameters if provided
             if llm_providers.contains(&"exec".to_string()) {
-                if let Some(exec_path) = matches.value_of("exec") {
+                if let Some(exec_path) = matches.get_one::<String>("exec") {
                     let mut exec_config = serde_json::json!({
                         "debug_logging": verbose
                     });
@@ -540,7 +544,7 @@ fn main() {
                         obj.insert("executable_path".to_string(), serde_json::json!(exec_path));
 
                         // Parse and set exec parameters if provided
-                        if let Some(exec_params) = matches.value_of("exec-params") {
+                        if let Some(exec_params) = matches.get_one::<String>("exec-params") {
                             let params: Vec<String> = exec_params.split(',')
                                 .map(|s| s.trim().to_string())
                                 .collect();
@@ -602,7 +606,7 @@ fn main() {
                     }
                 }
 
-                if let Some(output_file) = matches.value_of("output") {
+                if let Some(output_file) = matches.get_one::<String>("output") {
                     let output_path = Path::new(output_file);
                     info!("Saving results to {}", output_path.display());
 
@@ -623,15 +627,15 @@ fn main() {
         }
     }
 
-    if matches.is_present("make-prompt") {
-        if let Some(dir) = prompt_dir {
+    if matches.contains_id("make-prompt") {
+        if let Some(dir) = prompt_dir.as_deref() {
             info!("All prompts saved to directory: {dir}");
         }
     }
 
-    if !matches.is_present("train") && !matches.is_present("commit") && !matches.is_present("commits") &&
-       !matches.is_present("make-prompt") && !matches.is_present("send-prompt") {
-        println!("{}", matches.usage());
+    if !matches.get_flag("train") && !matches.contains_id("commit") && !matches.contains_id("commits") &&
+       !matches.contains_id("make-prompt") && !matches.contains_id("send-prompt") {
+        eprintln!("No operation specified. Use --help for usage information.");
     }
 }
 
