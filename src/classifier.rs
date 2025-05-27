@@ -658,19 +658,41 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
             return (false, format!("LLM Error: {filtered_response}"));
         }
 
-        // If response starts with NO: (very common pattern)
-        if filtered_response.trim().starts_with("NO:") {
+        let trimmed = filtered_response.trim();
+
+        // First priority: Check for markdown bold patterns (**YES** or **NO**)
+        // These take precedence over plain text patterns
+        if trimmed.starts_with("**YES**") {
+            return (true, filtered_response.to_string());
+        }
+        if trimmed.starts_with("**NO**") {
             return (false, filtered_response.to_string());
         }
 
-        // Look for "DECISION: YES" or "DECISION: NO" first as the most reliable indicators
+        // Check for bold patterns anywhere in the response using regex
+        // This ensures **YES** takes priority even if both **YES** and plain NO exist
+        let bold_yes_pattern = Regex::new(r"\*\*YES\*\*").unwrap();
+        let bold_no_pattern = Regex::new(r"\*\*NO\*\*").unwrap();
+
+        if bold_yes_pattern.is_match(&filtered_response) {
+            return (true, filtered_response.to_string());
+        } else if bold_no_pattern.is_match(&filtered_response) {
+            return (false, filtered_response.to_string());
+        }
+
+        // Second priority: Look for "DECISION: YES" or "DECISION: NO" as reliable indicators
         if filtered_response.contains("DECISION: YES") {
             return (true, filtered_response.to_string());
         } else if filtered_response.contains("DECISION: NO") {
             return (false, filtered_response.to_string());
         }
+        
+        // Third priority: Check for plain NO: pattern at the beginning
+        if trimmed.starts_with("NO:") {
+            return (false, filtered_response.to_string());
+        }
 
-        // Look for YES or NO at the beginning of the response or on its own line
+        // Fourth priority: Look for plain YES or NO patterns
         // Use multiline mode (?m) and account for whitespace and colons
         let yes_pattern = Regex::new(r"(?m)^YES|^YES[,.:;]|\nYES\n|\nYES[,.:;]|^[ \t]*YES:|^[ \t]*YES[ \t]*:").unwrap();
         let no_pattern = Regex::new(r"(?m)^NO|^NO[,.:;]|\nNO\n|\nNO[,.:;]|^[ \t]*NO:|^[ \t]*NO[ \t]*:").unwrap();
