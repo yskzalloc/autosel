@@ -660,19 +660,21 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
 
         let trimmed = filtered_response.trim();
 
-        // First priority: Check for markdown bold patterns (**YES** or **NO**)
+        // First priority: Check for markdown bold patterns at the start
         // These take precedence over plain text patterns
-        if trimmed.starts_with("**YES**") {
+        // Check for patterns like **YES**, **Answer: YES**, **Answer: NO**, etc.
+        if let Some(_caps) = Regex::new(r"^\*\*[^*]*\bYES\b[^*]*\*\*").unwrap().captures(trimmed) {
             return (true, filtered_response.to_string());
         }
-        if trimmed.starts_with("**NO**") {
+        if let Some(_caps) = Regex::new(r"^\*\*[^*]*\bNO\b[^*]*\*\*").unwrap().captures(trimmed) {
             return (false, filtered_response.to_string());
         }
 
         // Check for bold patterns anywhere in the response using regex
         // This ensures **YES** takes priority even if both **YES** and plain NO exist
-        let bold_yes_pattern = Regex::new(r"\*\*YES\*\*").unwrap();
-        let bold_no_pattern = Regex::new(r"\*\*NO\*\*").unwrap();
+        // Updated patterns to match **YES**, **Answer: YES**, etc.
+        let bold_yes_pattern = Regex::new(r"\*\*[^*]*\bYES\b[^*]*\*\*").unwrap();
+        let bold_no_pattern = Regex::new(r"\*\*[^*]*\bNO\b[^*]*\*\*").unwrap();
 
         if bold_yes_pattern.is_match(&filtered_response) {
             return (true, filtered_response.to_string());
@@ -704,16 +706,20 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
         }
 
         // If no clear YES/NO, look for keywords
-        let should_backport = filtered_response.to_lowercase().contains("should be backported") ||
-                            filtered_response.to_lowercase().contains("recommend backporting");
-
+        // Check negative patterns first since they are more specific
         let should_not_backport = filtered_response.to_lowercase().contains("should not be backported") ||
                                 filtered_response.to_lowercase().contains("not recommend backporting");
 
+        if should_not_backport {
+            return (false, filtered_response.to_string());
+        }
+
+        // Then check positive patterns
+        let should_backport = filtered_response.to_lowercase().contains("should be backported") ||
+                            filtered_response.to_lowercase().contains("recommend backporting");
+
         if should_backport {
             return (true, filtered_response.to_string());
-        } else if should_not_backport {
-            return (false, filtered_response.to_string());
         }
 
         // Default fallback - consider it not backportable unless clearly indicated
@@ -816,5 +822,296 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
             vote_ratio: result.vote_ratio,
             provider_results: result.provider_results,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_llm_response_with_think_blocks() {
+        // Test that content inside <think> blocks is filtered out
+        let response = r#"<think>
+This is some thinking that should be ignored.
+It might contain YES or NO but should not affect the result.
+</think>
+
+**NO**
+
+The commit should not be backported because it introduces new features."#;
+
+        let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+        assert!(!explanation.contains("This is some thinking"));
+        assert!(explanation.contains("The commit should not be backported"));
+    }
+
+    #[test]
+    fn test_parse_llm_response_bold_patterns_at_start() {
+        // Test bold YES at the start
+        let response = "**YES**\n\nThis commit fixes a critical bug.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test bold NO at the start
+        let response = "**NO**\n\nThis commit adds new features.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test bold Answer: YES pattern
+        let response = "**Answer: YES**\n\nThis should be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test bold Answer: NO pattern
+        let response = "**Answer: NO**\n\nThis should not be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_bold_patterns_priority() {
+        // Test that bold YES takes priority over plain NO
+        let response = "Some analysis here.\n\n**YES**\n\nBut also mentions NO later.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test that bold NO takes priority over plain YES
+        let response = "YES might be mentioned here.\n\n**NO**\n\nBut the final answer is no.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_decision_pattern() {
+        // Test DECISION: YES pattern
+        let response = "After careful analysis...\n\nDECISION: YES\n\nThis should be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test DECISION: NO pattern
+        let response = "After careful analysis...\n\nDECISION: NO\n\nThis should not be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_plain_patterns() {
+        // Test plain YES at start
+        let response = "YES\n\nThis commit fixes a security issue.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test plain NO at start
+        let response = "NO\n\nThis commit is too risky.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test NO: pattern at beginning
+        let response = "NO: This commit introduces new functionality.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test YES: pattern with spaces
+        let response = "  YES: This is a critical fix.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test YES with punctuation
+        let response = "YES, this should be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test NO with punctuation
+        let response = "NO, this is not suitable for stable.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_keyword_patterns() {
+        // Test "should be backported" keyword
+        let response = "This commit should be backported to stable branches.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test "recommend backporting" keyword
+        let response = "I recommend backporting this fix.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test "should not be backported" keyword
+        // After the fix, negative patterns are checked first
+        let response = "This commit should not be backported due to risk.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test "not recommend backporting" keyword
+        let response = "I do not recommend backporting this change.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_error_handling() {
+        // Test error message handling
+        let response = "Error: Failed to analyze commit";
+        let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+        assert!(explanation.starts_with("LLM Error:"));
+    }
+
+    #[test]
+    fn test_parse_llm_response_default_fallback() {
+        // Test response with no clear indicator
+        let response = "This commit makes some changes to the kernel.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test empty response
+        let response = "";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test response with only whitespace
+        let response = "   \n\n   ";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_mixed_case() {
+        // Test case insensitive keyword matching
+        let response = "This commit SHOULD BE BACKPORTED immediately.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        let response = "I Recommend Backporting this fix.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+    }
+
+    #[test]
+    fn test_parse_llm_response_complex_scenarios() {
+        // Test response with YES at start of line after colon
+        let response = "After analysis:\nYES\nThis is a critical fix.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test multiline response with YES on its own line
+        let response = "This commit analysis:\n\nYES\n\nIt fixes a security issue.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test response where bold pattern overrides later plain text
+        let response = "**YES**\n\nAlthough there are risks, I still say no to some aspects.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+    }
+
+    #[test]
+    fn test_parse_llm_response_edge_cases() {
+        // Test response with nested think blocks
+        let response = r#"<think>
+Nested <think>should still work</think> properly
+</think>
+**YES**"#;
+        let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+        assert!(!explanation.contains("Nested"));
+
+        // Test malformed bold pattern (should not match bold, and not match plain YES either)
+        let response = "*YES* (not bold)\n\nSome explanation.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        // This should not match bold pattern or plain YES pattern (since *YES* is not at start)
+        assert_eq!(should_backport, false);
+
+        // Test response with YES in code block (should still match)
+        let response = "```\nYES\n```\nThis is the answer.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+    }
+
+    #[test]
+    fn test_parse_llm_response_priority_order() {
+        // Test that bold patterns take priority over DECISION patterns
+        let response = "DECISION: NO\n\n**YES**\n\nActually, yes it should be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test that DECISION patterns take priority over plain patterns
+        let response = "NO\n\nDECISION: YES\n\nAfter further analysis.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test that plain patterns take priority over keywords
+        let response = "YES\n\nThis should not be backported though.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+    }
+
+    #[test]
+    fn test_parse_llm_response_think_block_edge_cases() {
+        // Test unclosed think block (should NOT be filtered since no closing tag)
+        let response = "<think>\nThis should be filtered\nNO\n\nThis should also be filtered";
+        let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false); // NO is still found
+        assert!(explanation.contains("<think>")); // The whole response is kept
+
+        // Test multiple think blocks
+        let response = "<think>\nFirst thought\n</think>\n\n**NO**\n\n<think>\nSecond thought\n</think>\n\nExplanation here.";
+        let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+        assert!(explanation.contains("**NO**"));
+        assert!(explanation.contains("Explanation here"));
+        assert!(!explanation.contains("First thought"));
+        assert!(!explanation.contains("Second thought"));
+    }
+
+    #[test]
+    fn test_parse_llm_response_special_formats() {
+        // Test with leading/trailing whitespace
+        let response = "   \n\n  **YES**  \n\n   ";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test YES followed by colon and explanation on same line
+        let response = "YES: This fixes a critical security vulnerability.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test with tabs (doesn't match plain YES pattern)
+        let response = "\t\tYES\t\t";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false); // Doesn't match because YES is not at start of line
+
+        // Test answer in parentheses
+        let response = "(YES) - This should be backported";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true); // Actually matches "should be backported" keyword
+
+        // Test YES in quotes (should not match)
+        let response = "\"YES\" is what I would say if this was backportable, but it's not.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_conflicting_signals() {
+        // Test response with both positive and negative keywords (negative should win)
+        let response = "I recommend backporting this, but actually I do not recommend backporting after all.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test response with YES pattern (which takes priority over negative keywords)
+        let response = "Analysis complete.\n\nThis should not be backported.\n\nYES, I'm sure about this.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true); // Plain YES pattern takes priority over keywords
+
+        // Test bold NO overrides everything
+        let response = "YES\nDECISION: YES\nI recommend backporting\n\n**NO**\n\nActually, no.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
     }
 }
