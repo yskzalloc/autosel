@@ -671,15 +671,26 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
         }
 
         // Check for bold patterns anywhere in the response using regex
-        // This ensures **YES** takes priority even if both **YES** and plain NO exist
-        // Updated patterns to match **YES**, **Answer: YES**, etc.
+        // Find the FIRST occurrence of either **YES** or **NO** pattern
         let bold_yes_pattern = Regex::new(r"\*\*[^*]*\bYES\b[^*]*\*\*").unwrap();
         let bold_no_pattern = Regex::new(r"\*\*[^*]*\bNO\b[^*]*\*\*").unwrap();
 
-        if bold_yes_pattern.is_match(&filtered_response) {
-            return (true, filtered_response.to_string());
-        } else if bold_no_pattern.is_match(&filtered_response) {
-            return (false, filtered_response.to_string());
+        // Find the position of first YES and NO patterns
+        let yes_pos = bold_yes_pattern.find(&filtered_response).map(|m| m.start());
+        let no_pos = bold_no_pattern.find(&filtered_response).map(|m| m.start());
+
+        // Use whichever pattern appears first
+        match (yes_pos, no_pos) {
+            (Some(y), Some(n)) => {
+                if y < n {
+                    return (true, filtered_response.to_string());
+                } else {
+                    return (false, filtered_response.to_string());
+                }
+            },
+            (Some(_), None) => return (true, filtered_response.to_string()),
+            (None, Some(_)) => return (false, filtered_response.to_string()),
+            (None, None) => {} // Continue to next pattern check
         }
 
         // Second priority: Look for "DECISION: YES" or "DECISION: NO" as reliable indicators
@@ -688,13 +699,20 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
         } else if filtered_response.contains("DECISION: NO") {
             return (false, filtered_response.to_string());
         }
-        
-        // Third priority: Check for plain NO: pattern at the beginning
+
+        // Third priority: Check for markdown heading patterns ## YES or ## NO
+        if trimmed.starts_with("## YES") {
+            return (true, filtered_response.to_string());
+        } else if trimmed.starts_with("## NO") {
+            return (false, filtered_response.to_string());
+        }
+
+        // Fourth priority: Check for plain NO: pattern at the beginning
         if trimmed.starts_with("NO:") {
             return (false, filtered_response.to_string());
         }
 
-        // Fourth priority: Look for plain YES or NO patterns
+        // Fifth priority: Look for plain YES or NO patterns
         // Use multiline mode (?m) and account for whitespace and colons
         let yes_pattern = Regex::new(r"(?m)^YES|^YES[,.:;]|\nYES\n|\nYES[,.:;]|^[ \t]*YES:|^[ \t]*YES[ \t]*:").unwrap();
         let no_pattern = Regex::new(r"(?m)^NO|^NO[,.:;]|\nNO\n|\nNO[,.:;]|^[ \t]*NO:|^[ \t]*NO[ \t]*:").unwrap();
@@ -1049,6 +1067,16 @@ Nested <think>should still work</think> properly
         let response = "YES\n\nThis should not be backported though.";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, true);
+
+        // Test that first bold pattern wins
+        let response = "**NO** This commit should **NOT** be backported. **Similar commits marked YES** are different.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test that first bold pattern wins (YES before NO)
+        let response = "**YES** This commit should be backported. **Similar commits marked NO** were wrong.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
     }
 
     #[test]
@@ -1093,6 +1121,29 @@ Nested <think>should still work</think> properly
 
         // Test YES in quotes (should not match)
         let response = "\"YES\" is what I would say if this was backportable, but it's not.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_markdown_heading_patterns() {
+        // Test ## YES pattern
+        let response = "## YES This commit should be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true);
+
+        // Test ## NO pattern
+        let response = "## NO This commit should not be backported.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test ## NO with bold NOT in explanation
+        let response = "## NO This commit should **NOT** be backported to stable kernel trees.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false);
+
+        // Test that ## patterns take priority over keyword patterns
+        let response = "## NO\n\nAlthough it says should be backported here.";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
     }
