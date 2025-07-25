@@ -34,8 +34,7 @@ fn main() {
         .arg(Arg::new("model-dir")
             .long("model-dir")
             .value_name("PATH")
-            .help("Path to store the model")
-            .default_value("./model")
+            .help("Path to store the model (when not provided, RAG features are disabled)")
             .num_args(1))
         .arg(Arg::new("models")
             .long("models")
@@ -116,28 +115,33 @@ fn main() {
     setup_logging(matches.get_flag("debug"), batch_mode);
 
     let kernel_repo = matches.get_one::<String>("kernel-repo").unwrap();
-    let model_dir = matches.get_one::<String>("model-dir").unwrap();
+    let model_dir = matches.get_one::<String>("model-dir");
     let test_mode = matches.get_flag("test");
     let verbose = matches.get_flag("verbose");
     let explanation_dir = matches.get_one::<String>("batch");
     let prompt_dir = matches.get_one::<String>("make-prompt");
     let prompt_file = matches.get_one::<String>("send-prompt");
 
-    let model_dir_path = Path::new(model_dir);
-    if !model_dir_path.exists() {
-        if let Err(e) = fs::create_dir_all(model_dir_path) {
-            error!("Failed to create model directory: {e}");
-            std::process::exit(1);
+    let model_dir_path = model_dir.map(|dir| Path::new(dir));
+    let vectorstore_dir = if let Some(model_path) = model_dir_path {
+        if !model_path.exists() {
+            if let Err(e) = fs::create_dir_all(model_path) {
+                error!("Failed to create model directory: {e}");
+                std::process::exit(1);
+            }
         }
-    }
-
-    let vectorstore_dir = model_dir_path.join("vectorstore");
-    if !vectorstore_dir.exists() {
-        if let Err(e) = fs::create_dir_all(&vectorstore_dir) {
-            error!("Failed to create vectorstore directory: {e}");
-            std::process::exit(1);
+        
+        let vstore_dir = model_path.join("vectorstore");
+        if !vstore_dir.exists() {
+            if let Err(e) = fs::create_dir_all(&vstore_dir) {
+                error!("Failed to create vectorstore directory: {e}");
+                std::process::exit(1);
+            }
         }
-    }
+        Some(vstore_dir)
+    } else {
+        None
+    };
 
     let llm_providers = if let Some(models) = matches.get_one::<String>("models") {
         models.split(',')
@@ -158,6 +162,11 @@ fn main() {
         .expect("Failed to create tokio runtime");
 
     if matches.get_flag("train") {
+        if model_dir_path.is_none() {
+            error!("--model-dir is required when training a model");
+            std::process::exit(1);
+        }
+        
         info!("Starting training process...");
 
         debug!("Initializing data collector with kernel repo: {}", kernel_repo_path.display());
@@ -197,7 +206,7 @@ fn main() {
         let mut classifier = BackportClassifier::new(
             Vec::new(),
             None,
-            Some(&vectorstore_dir),
+            vectorstore_dir.as_deref(),
             Some(kernel_repo_path)
         );
 
@@ -206,7 +215,7 @@ fn main() {
             std::process::exit(1);
         }
 
-        let model_path = model_dir_path.join("backport_classifier.bin");
+        let model_path = model_dir_path.unwrap().join("backport_classifier.bin");
         info!("Saving model to {}", model_path.display());
 
         if let Err(e) = classifier.save_model(&model_path) {
@@ -218,24 +227,35 @@ fn main() {
     }
 
     if matches.contains_id("commit") || matches.contains_id("commits") {
-        let model_path = model_dir_path.join("backport_classifier.bin");
-
-        if !model_path.exists() {
-            error!("Model file not found at {}. Please train the model first.", model_path.display());
-            std::process::exit(1);
-        }
-
-        info!("Loading model from {}", model_path.display());
-
-        let mut classifier = match BackportClassifier::load_model(&model_path) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Failed to load model: {e}");
+        let mut classifier = if let Some(model_dir) = model_dir_path {
+            let model_path = model_dir.join("backport_classifier.bin");
+            
+            if !model_path.exists() {
+                error!("Model file not found at {}. Please train the model first.", model_path.display());
                 std::process::exit(1);
             }
-        };
 
-        classifier.repo_path = Some(kernel_repo_path.to_path_buf());
+            info!("Loading model from {}", model_path.display());
+
+            match BackportClassifier::load_model(&model_path) {
+                Ok(mut c) => {
+                    c.repo_path = Some(kernel_repo_path.to_path_buf());
+                    c
+                }
+                Err(e) => {
+                    error!("Failed to load model: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            info!("No model directory specified, running without RAG features");
+            BackportClassifier::new(
+                llm_providers.clone(),
+                None,
+                None,  // No vectorstore when model-dir is not provided
+                Some(kernel_repo_path)
+            )
+        };
 
         if matches.contains_id("models") {
             classifier.llm_providers.clone_from(&llm_providers);
@@ -347,17 +367,20 @@ fn main() {
             match collector.get_commit_features(sha) {
                 Some(features) => {
                     if let Some(dir) = prompt_dir.as_deref() {
-                        if !classifier.embeddings.is_initialized() {
-                            info!("Initializing embeddings model for prompt generation");
-                            if let Err(e) = classifier.embeddings.initialize() {
-                                error!("Failed to initialize embeddings model: {e}");
-                                continue;
-                            }
-                        }
-
                         let commit_text = classifier::BackportClassifier::format_commit_info(&features);
 
-                        let similar_commits = classifier.find_similar_commits(&commit_text, 5);
+                        let similar_commits = if model_dir_path.is_some() {
+                            if !classifier.embeddings.is_initialized() {
+                                info!("Initializing embeddings model for prompt generation");
+                                if let Err(e) = classifier.embeddings.initialize() {
+                                    error!("Failed to initialize embeddings model: {e}");
+                                    continue;
+                                }
+                            }
+                            classifier.find_similar_commits(&commit_text, 5)
+                        } else {
+                            Vec::new() // No similar commits when model-dir is not provided
+                        };
 
                         let prompt = classifier::BackportClassifier::construct_prompt(&commit_text, &similar_commits);
 

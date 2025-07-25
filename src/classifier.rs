@@ -444,9 +444,22 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
         let context_text = context_parts.join("\n\n");
 
         // Replace placeholders in the template
-        prompt_template
-            .replace("{context}", &context_text)
-            .replace("{commit_info}", commit_text)
+        if context_text.is_empty() {
+            // When no similar commits, remove the context section from the prompt
+            let prompt_without_context = prompt_template
+                .lines()
+                .filter(|line| !line.contains("Historical similar commits") && 
+                              !line.contains("{context}") &&
+                              !line.contains("IMPORTANT: Pay close attention to the Backport Status"))
+                .collect::<Vec<&str>>()
+                .join("\n");
+            
+            prompt_without_context.replace("{commit_info}", commit_text)
+        } else {
+            prompt_template
+                .replace("{context}", &context_text)
+                .replace("{commit_info}", commit_text)
+        }
     }
 
     pub fn find_similar_commits(&self, commit_text: &str, k: usize) -> Vec<(String, bool)> {
@@ -580,23 +593,24 @@ Provide your answer as YES or NO, followed by an extensive explanation that refe
         // Initialize LLMs if not already done
         self.initialize_llms()?;
 
-        if self.vectorstore.is_none() {
-            return Err("Vectorstore not initialized. Please train the model first.".to_string());
-        }
-
-        // Ensure embeddings are initialized only if they aren't already
-        if !self.embeddings.is_initialized() {
-            info!("Initializing embeddings model for prediction");
-            if let Err(e) = self.embeddings.initialize() {
-                return Err(format!("Failed to initialize embeddings model: {e}"));
-            }
-        }
-
         // Generate the vector database search for context
         let commit_text = Self::format_commit_info(commit_info);
 
-        // Get similar commits for context
-        let similar_commits = self.find_similar_commits(&commit_text, 5);
+        let similar_commits = if self.vectorstore.is_some() {
+            // Ensure embeddings are initialized only if they aren't already
+            if !self.embeddings.is_initialized() {
+                info!("Initializing embeddings model for prediction");
+                if let Err(e) = self.embeddings.initialize() {
+                    return Err(format!("Failed to initialize embeddings model: {e}"));
+                }
+            }
+            // Get similar commits for context
+            self.find_similar_commits(&commit_text, 5)
+        } else {
+            // No RAG when vectorstore is not available
+            info!("Running without RAG features - no similar commits will be used");
+            Vec::new()
+        };
 
         // Construct prompt with context and commit info
         let prompt = Self::construct_prompt(&commit_text, &similar_commits);
