@@ -391,7 +391,7 @@ impl BackportClassifier {
         let prompt_template = r#"You are a Linux kernel expert analyzing commits to determine if they should be backported to stable kernel trees.
 Analyze both the commit message and the code changes carefully to identify if this commit is suitable for backporting.
 
-IMPORTANT: If the environment variable $CVEKERNELDIR is set, it points to a full Linux kernel repository. You should use any available tools to examine this repository to better understand the context of the commit, including:
+IMPORTANT: If the environment variable $CVEKERNELTREE is set, it points to a full Linux kernel repository. You should use any available tools to examine this repository to better understand the context of the commit, including:
 - Check related files to understand the surrounding code
 - Look for related commits or fixes
 - Examine the subsystem's history
