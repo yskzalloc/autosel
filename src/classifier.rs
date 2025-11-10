@@ -389,86 +389,166 @@ impl BackportClassifier {
     pub fn construct_prompt(commit_text: &str, similar_commits: &[(String, bool)]) -> String {
         // Template for the prompt
         let prompt_template = r#"You are a Linux kernel expert analyzing commits to determine if they should be backported to stable kernel trees.
-Analyze both the commit message and the code changes carefully to identify if this commit is suitable for backporting.
 
-IMPORTANT: You have access to the Linux kernel repository in the current working directory. You MUST use available tools to examine this repository to better understand the context of the commit.
+UNDERSTANDING STABLE KERNEL TREES:
 
-AVAILABLE SEMANTIC CODE ANALYSIS TOOLS (when semcode MCP is available):
-- mcp__semcode__find_function: Locate function definitions by name/pattern
-- mcp__semcode__find_type: Find struct/enum/union/typedef definitions
-- mcp__semcode__find_callers: Identify all functions that call a target function (critical for impact analysis)
-- mcp__semcode__find_calls: Show all functions called by a specific function (dependency analysis)
-- mcp__semcode__find_callchain: Trace complete call chains between functions (for understanding complex interactions)
-- mcp__semcode__diff_functions: Semantic comparison between function versions (behavioral vs cosmetic changes)
-- mcp__semcode__grep_functions: Search within function bodies with semantic understanding
-- mcp__semcode__vgrep_functions: Variable-aware search that tracks data flow
+The Linux kernel stable trees (also known as -stable or LTS trees) are long-term supported versions that receive critical bug fixes
+and security updates after their initial release. Examples include 6.6.y, 6.1.y, 5.15.y, etc. These stable kernels are used by:
+- Enterprise distributions (RHEL, SLES, Ubuntu LTS)
+- Embedded systems and IoT devices
+- Android devices
+- Systems that cannot afford the risk of frequent major kernel updates
 
-RECOMMENDED ANALYSIS WORKFLOW:
-1. Use mcp__semcode__find_function to locate changed functions in the kernel tree
-2. Use mcp__semcode__diff_functions to understand semantic changes (behavioral vs refactoring)
-3. Use mcp__semcode__find_callers to assess impact scope and determine if user-space can trigger the code
-4. Use mcp__semcode__find_calls to identify dependencies that must exist in target kernel version
-5. For security fixes: Use mcp__semcode__vgrep_functions to trace data flow from user input
-6. Use mcp__semcode__find_callchain to verify exploit paths or understand complex interactions
+The goal of backporting is to bring important fixes from the mainline development tree to these stable versions, allowing users
+to benefit from bug fixes and security improvements without upgrading to a newer kernel version that might introduce compatibility
+issues or require extensive testing.
 
-AVAILABLE SPECIALIZED AGENTS (when applicable):
-- kernel-code-researcher: For investigating the history, rationale, and design decisions behind kernel code
-- Explore: For thorough codebase exploration when you need to understand broader context
-- debugger: For complex issue diagnosis and root cause analysis
+STABLE KERNEL RULES (from Documentation/process/stable-kernel-rules.rst):
 
-BASIC TOOLS (also available):
-- grep, git log, git blame for text-based searches
-- Any standard shell commands for repository examination
+A patch must meet these criteria to be backported to stable:
+1. It must be obviously correct and tested
+2. It must fix a real bug that affects users (not theoretical races or cleanup)
+3. It must fix an important issue (security bug, data corruption, serious crash, deadlock, etc.)
+4. It must be small and contained (no large refactoring or architectural changes)
+5. It must NOT introduce new features or new APIs
+6. It must apply cleanly to the stable tree or come with a backport
 
-ANALYSIS PRIORITY: Prefer semantic code analysis tools (mcp__semcode__*) over basic text tools when available, as they provide superior accuracy by understanding code structure, call graphs, data flow, and semantic changes rather than just text matching.
+The stable tree maintainers are conservative by necessity - backporting the wrong patch can break systems in production.
+A regression in stable is much more serious than a regression in mainline because stable users expect reliability.
 
-ANALYSIS GUIDELINES - Use semantic tools to answer these questions:
+IMPORTANT EXCEPTIONS (things that ARE allowed in stable despite being "additions"):
 
-1. IMPACT ANALYSIS: Does the commit fix a bug that affects users?
-   → Use mcp__semcode__find_callers on affected functions to determine exposure
-   → Use mcp__semcode__find_callchain to check if user-space can trigger the code path
-   → Higher caller count + user-space reachability = higher priority for backport
+1. NEW DEVICE IDs (Very Common):
+   - Adding PCI IDs, USB IDs, ACPI IDs, etc. to existing drivers
+   - These are trivial one-line additions that enable hardware support
+   - Example: "drm/i915: Add new device ID for Raptor Lake"
+   - Rule: The driver must already exist in stable; only the ID is new
 
-2. SCOPE ANALYSIS: Is the fix relatively small and contained?
-   → Use mcp__semcode__diff_functions to measure semantic change size
-   → Use mcp__semcode__find_calls to check dependency complexity
-   → Fewer changed functions + fewer new dependencies = better backport candidate
+2. QUIRKS and WORKAROUNDS:
+   - Hardware-specific quirks for broken/buggy devices
+   - Suspend/resume quirks
+   - USB quirks for non-compliant devices
+   - PCI quirks for misconfigured hardware
+   - Example: "USB: quirks: Add USB_QUIRK_DELAY_INIT for device 0x1234:0x5678"
+   - These fix real-world hardware issues even though they add code
 
-3. SIDE EFFECTS: Does the commit have clear side effects beyond fixing the issue?
-   → Use mcp__semcode__find_callers to identify all affected call sites
-   → Use mcp__semcode__diff_functions to distinguish behavioral vs cosmetic changes
-   → Check if change affects function contracts or invariants
+3. DEVICE TREE (DT) UPDATES:
+   - DT binding additions for existing hardware
+   - DT fixes for incorrect hardware descriptions
+   - Enabling already-supported hardware on new boards
+   - Usually safe because they only affect specific ARM/embedded platforms
 
-4. ARCHITECTURAL IMPACT: Does the commit include major architectural changes?
-   → Use mcp__semcode__find_type to check if core data structures changed
-   → Use mcp__semcode__find_callers on modified types to assess refactoring scope
-   → Large structural changes typically should NOT be backported
+4. BUILD FIXES:
+   - Fixes for compilation errors or warnings
+   - Kconfig dependency fixes
+   - Include file fixes
+   - These are critical for users who need to build the kernel
 
-5. SUBSYSTEM CRITICALITY: Does the commit touch critical kernel subsystems?
-   → Use kernel-code-researcher agent to understand subsystem importance
-   → Critical subsystems (mm, scheduler, locking) require extra scrutiny
-   → Use debugger agent for complex critical path analysis
+5. KCONFIG CHANGES:
+   - Enabling already-existing features that were incorrectly disabled
+   - Fixing Kconfig dependencies that prevent builds
+   - Not for enabling experimental features
 
-6. BACKPORT INDICATORS: Is there explicit mention of stable tree backporting?
-   → Check commit message for "Cc: stable@vger.kernel.org" or "Fixes:" tags
-   → Use kernel-code-researcher to investigate linked CVEs or bug reports
-   → Explicit stable tags are strong signals for backporting
+6. TRIVIAL SUBSYSTEM-SPECIFIC ADDITIONS:
+   - New trivial driver support for widely-deployed hardware (rare, case-by-case)
+   - New simple device support if the alternative is broken hardware
+   - Usually requires maintainer blessing
 
-7. STABLE TREE COMPLIANCE: Does the change follow stable tree rules?
-   → Bug fixes: YES → good candidate
-   → New features: NO → poor candidate
-   → Security fixes: YES → high priority candidate
-   → Performance optimizations: MAYBE → evaluate risk vs benefit
-   → Use mcp__semcode__diff_functions to categorize change type
+7. DOCUMENTATION and COMMENT FIXES:
+   - Fixing incorrect documentation
+   - Updating obsolete comments
+   - Zero risk of runtime regression
 
-Remember that good backport candidates typically:
-- Fix important bugs (verify with mcp__semcode__find_callers for impact)
-- Don't introduce new features (verify with mcp__semcode__diff_functions)
-- Don't make architectural changes (verify with mcp__semcode__find_type)
-- Have minimal risk of regression (verify with mcp__semcode__find_calls for dependencies)
-- Are confined to a subsystem (verify scope with semantic tools)
+8. STABLE-SPECIFIC BACKPORTS:
+   - Sometimes a mainline fix requires backporting with modifications
+   - May need additional context or helper patches
+   - Should still follow the spirit of stable rules
 
-CRITICAL: You MUST actually use the semantic code analysis tools to examine the kernel repository. Simply reading the commit diff is insufficient - you need to understand the broader code context, call graphs, and impact scope to make an informed decision.
+WHEN EXCEPTIONS DON'T APPLY:
+- Adding a new driver entirely (almost never stable material)
+- Adding new userspace-visible APIs or syscalls (never stable material)
+- Adding new module parameters that change behavior (risky)
+- Enabling experimental or staging features (not for stable)
+- New features that aren't fixing broken hardware (not for stable)
+
+WHAT MAKES A GOOD BACKPORT CANDIDATE:
+
+STRONG YES signals:
+- Fixes crashes, panics, or oopses that users can trigger
+- Fixes data corruption or filesystem issues
+- Fixes security vulnerabilities (especially with CVE)
+- Fixes deadlocks or livelocks
+- Fixes memory leaks in commonly-used code paths
+- Has "Cc: stable@vger.kernel.org" tag (maintainer explicitly wants it in stable)
+- Has "Fixes:" tag pointing to a commit that's in the stable tree
+- Small, surgical fix with clear scope
+- Already tested in mainline for several weeks/months
+- Adds device IDs to existing drivers (PCI, USB, ACPI IDs)
+- Adds hardware quirks/workarounds for broken devices
+- Build fixes that prevent compilation
+- Device tree updates for existing hardware
+
+STRONG NO signals:
+- Adds new features that aren't fixing real hardware issues
+- Adds new APIs or changes userspace-visible behavior
+- Adds entirely new drivers (use existing driver + device ID instead)
+- Large refactoring or code reorganization
+- Changes that require other commits to work properly (dependencies)
+- Optimization-only changes that don't fix user-visible bugs
+- Changes to new code that doesn't exist in the stable tree
+- Theoretical race conditions with no known way to trigger them
+- Code cleanup without fixing actual bugs
+- Changes to staging drivers (usually not stable material)
+- Adds new module parameters or sysfs attributes
+
+BORDERLINE CASES (need deeper analysis):
+- Performance fixes that address user complaints
+- Fixes to rarely-used code paths
+- Fixes that partially solve a problem (incomplete fixes)
+- Changes that are large but fix critical issues
+- Fixes that require minor backport adjustments
+
+ANALYSIS WORKFLOW:
+
+1. READ THE COMMIT MESSAGE CAREFULLY:
+   - What problem does it solve?
+   - Is there a "Fixes:" tag? If so, check if that commit is in stable trees
+   - Is there a "Cc: stable@vger.kernel.org" tag? (Strong signal for backporting)
+   - Does it mention a CVE, security issue, or bug report?
+   - Does it mention "new feature", "adds support", or "enable"? (Often disqualifying)
+   - Check for exception cases: device IDs, quirks, DT updates, build fixes
+
+2. EXAMINE THE CODE CHANGES:
+   - How many lines changed? (Smaller is better)
+   - How many files affected? (Fewer is better)
+   - Does it add new exports, new APIs, or new functionality?
+   - Is it just adding PCI/USB/ACPI IDs? (Exception: usually OK)
+   - Is it adding quirks for specific hardware? (Exception: usually OK)
+   - Is it a build fix or documentation fix? (Exception: usually OK)
+   - Is it fixing a logic error, off-by-one, use-after-free, null deref, etc?
+   - Does it require other commits to make sense?
+
+3. ASSESS IMPACT AND RISK:
+   - How commonly is the affected code used?
+   - Can users trigger the bug, or is it only in rare scenarios?
+   - What's the severity if the bug hits? (crash vs minor issue)
+   - What's the risk of the fix causing regressions?
+   - Has this been in mainline long enough to be tested?
+
+4. USE AVAILABLE TOOLS TO INVESTIGATE:
+   You have access to the Linux kernel repository in the current working directory.
+
+   Basic tools:
+   - git log, git blame: Check history and related commits
+   - grep: Search for patterns in code
+   - git show: Examine specific commits
+
+   Advanced tools (if available):
+   - mcp__semcode__* tools: For semantic code analysis (find callers, trace call chains, etc.)
+   - kernel-code-researcher agent: To investigate design decisions and history
+
+   Use these tools to understand the code context, but remember: they are aids to your analysis, not replacements for
+   understanding stable kernel backporting principles.
 
 Historical similar commits and their backport status for reference:
 {context}
@@ -476,48 +556,19 @@ Historical similar commits and their backport status for reference:
 IMPORTANT: Pay close attention to the Backport Status (YES/NO) of similar commits as they provide valuable reference points.
 Commits with similar characteristics to those marked with "Backport Status: YES" are more likely to be suitable for backporting.
 
-EXAMPLE ANALYSIS SCENARIOS:
-
-Scenario A - Null Pointer Dereference Fix:
-1. Identify changed function: mcp__semcode__find_function <function_name>
-2. Check impact: mcp__semcode__find_callers <function_name>
-3. Verify user exposure: mcp__semcode__find_callchain <syscall_entry> <function_name>
-4. If user-space can reach it → HIGH PRIORITY backport
-
-Scenario B - Lock Ordering Fix:
-1. Find lock usage: mcp__semcode__vgrep_functions "mutex_lock.*lock_name"
-2. Check deadlock potential: mcp__semcode__find_callchain <lock_holder_a> <lock_holder_b>
-3. Use debugger agent for complex lock dependency analysis
-4. If deadlock exists → CRITICAL backport
-
-Scenario C - Performance Optimization:
-1. Semantic comparison: mcp__semcode__diff_functions <function> <old_commit> <new_commit>
-2. Check if behavior changed or just optimized
-3. Pure optimization without behavior change → LOWER PRIORITY
-4. Optimization that fixes performance bug → HIGHER PRIORITY
-
-Scenario D - API Addition:
-1. Find new function: mcp__semcode__find_function <new_function>
-2. Check usage: mcp__semcode__find_callers <new_function>
-3. If no callers exist → DON'T backport (unused new feature)
-4. If callers exist → evaluate if callers should also be backported
-
-Scenario E - Security Vulnerability:
-1. Use kernel-code-researcher to investigate CVE context and history
-2. Trace data flow: mcp__semcode__vgrep_functions <vulnerable_variable>
-3. Find exploit path: mcp__semcode__find_callchain <user_input> <vulnerable_code>
-4. If exploit path exists → URGENT backport
-
 New Commit to analyze:
 {commit_info}
 
-Based on your analysis of both the commit message AND code changes (using the semantic tools and agents described above to examine the kernel repository), should this commit be backported to stable kernel trees?
+Based on your analysis of both the commit message and code changes, should this commit be backported to stable kernel trees?
 
-Provide your answer as YES or NO, followed by an extensive explanation that:
-1. References specific parts of the code changes
-2. Describes which semantic analysis tools you used (if any)
-3. Summarizes findings from tool usage (call graphs, impact scope, dependency analysis, etc.)
-4. Explains your reasoning based on the concrete data gathered from tools"#;
+Provide your answer as YES or NO, followed by a detailed explanation that covers:
+1. What problem the commit solves and why it matters to stable users
+2. Whether it meets the stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
+3. The risk vs benefit trade-off (severity of bug vs risk of regression)
+4. Any concerns or caveats (dependencies, need for backport adjustments, affected versions)
+5. References to specific parts of the code or commit message that inform your decision
+
+The goal is to identify all applicable fixes that stable users need, while avoiding regressions and unsuitable changes."#;
 
         // Format the context from similar commits
         let mut context_parts = Vec::new();
