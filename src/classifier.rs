@@ -510,6 +510,142 @@ BORDERLINE CASES (need deeper analysis):
 
 ANALYSIS WORKFLOW:
 
+STEP 0: COMPREHENSIVE ANALYSIS FRAMEWORK
+   Your analysis MUST be thorough and systematic. Work through each of these investigation areas carefully.
+   Don't skip steps - comprehensive analysis is critical for making the right backporting decision.
+
+   IMPORTANT: Tool usage is FREE and ENCOURAGED. Whenever you need more information, use the available tools:
+   git commands (git log, git blame, git show, git grep), semantic code analysis (mcp__semcode__* tools), or
+   any other tools that help understand the code better. Don't hesitate - investigate deeply!
+
+   ESSENTIAL ANALYSIS AREAS (investigate all of these thoroughly):
+
+   1. COMMIT MESSAGE ANALYSIS
+      Parse the commit subject and body carefully. Look for keywords like "fix", "crash", "deadlock",
+      "corruption", "oops", "panic", "regression". Identify what problem is being solved and why it matters.
+      Look for "Cc: stable@vger.kernel.org" or "Fixes:" tags - these are strong signals.
+      If you see a Fixes: tag, note the commit SHA - you MUST investigate it in the next step.
+
+   2. DEEP CODE RESEARCH (MANDATORY - DO NOT SKIP)
+      This is a REQUIRED step. You must conduct detailed research into the code and issue history:
+
+      A. UNDERSTAND HOW THE BUG WAS INTRODUCED:
+         - If there's a Fixes: tag, use "git show <commit-sha>" to examine the commit that introduced the bug
+         - Use "git blame" on the affected files to see when the buggy code was added
+         - Use "git log" on the affected files to understand the evolution of the code
+         - Determine: When was this code introduced? What was the original intent? What changed?
+
+      B. ANALYZE THE ACTUAL CODE IN DETAIL:
+         - Read the diff carefully line by line - don't just skim it
+         - Understand what the buggy code does and WHY it's wrong
+         - Explain the technical mechanism of the bug (e.g., "the code dereferences a pointer before checking
+           for NULL because...", "the race condition occurs when thread A modifies X while thread B reads it...")
+         - Identify the root cause at the code level (logic error, missing check, wrong order of operations, etc.)
+
+      C. EXPLAIN THE FIX:
+         - What does the fix change in the code?
+         - Why does this change solve the problem?
+         - Are there any subtle implications or edge cases?
+
+      D. USE SEMANTIC ANALYSIS TOOLS:
+         - Use mcp__semcode__find_function to locate the functions being modified
+         - Use mcp__semcode__find_callers to see where these functions are called from
+         - Use mcp__semcode__find_calls to see what these functions call
+         - This helps you understand the context and potential impact
+
+      E. RESEARCH THE SUBSYSTEM:
+         - What subsystem is this in? (networking, filesystem, driver, mm, scheduler, etc.)
+         - How mature/stable is this subsystem?
+         - Check git log on the directory to see how active development is
+
+      Your analysis MUST include:
+      - A clear technical explanation of what the bug is and how it manifests
+      - How the bug was introduced (cite specific commits if possible)
+      - Why the fix works at the code level
+      - Whether this is well-understood or complex/subtle
+
+      DO NOT PROCEED without completing this deep research. Use git commands and semantic tools liberally.
+      This understanding is essential for assessing whether the fix is "obviously correct" (a stable requirement).
+
+   3. SECURITY ASSESSMENT
+      Search for "CVE-", "security", "vulnerability", "exploit", "UAF", "use-after-free", "buffer overflow",
+      "integer overflow", "privilege escalation", "DoS", "memory safety". Any security issue is a STRONG YES signal.
+
+   4. FEATURE VS BUG FIX CLASSIFICATION
+      Is this fixing a bug or adding a feature? Keywords like "add support", "implement", "introduce", "enable new"
+      suggest features (usually NO). Keywords like "fix", "correct", "prevent", "avoid" suggest fixes (possibly YES).
+      BUT check for EXCEPTION CATEGORIES:
+      - Device ID additions (PCI/USB/ACPI IDs like "0x1234:0x5678") - USUALLY YES
+      - Hardware quirks/workarounds (look for "quirk", "workaround", "broken hardware") - USUALLY YES
+      - Device tree updates (.dts/.dtsi files) - USUALLY YES
+      - Build fixes (Kconfig, Makefile, #include, compilation errors) - USUALLY YES
+      - Documentation fixes (.rst, .txt, Documentation/) - USUALLY YES
+
+   5. CODE CHANGE SCOPE ASSESSMENT
+      Count lines changed, files touched, complexity. Small surgical fixes are safer. Large refactoring is risky.
+      The diff is in the "Changes:" section - analyze it carefully.
+
+   6. BUG TYPE AND SEVERITY (if this is a bug fix)
+      What kind of bug? Crash/panic/oops? Data corruption? Deadlock? Memory leak? Logic error? Race condition?
+      How severe? CRITICAL (crash, data loss, security)? HIGH (service disruption)? MEDIUM (malfunction)? LOW (cosmetic)?
+      Severity affects the risk/benefit calculation.
+
+   7. USER IMPACT EVALUATION
+      Who is affected? Core kernel paths and common drivers = HIGH impact. Obscure drivers = LOW impact.
+      Consider using git log to see how active the affected files are. If you're unsure about how widely
+      a function is used, use mcp__semcode__find_callers to see all call sites - this is very useful!
+
+   8. REGRESSION RISK ANALYSIS
+      Could this fix break something else? Consider size, complexity, subsystems touched, testing mentioned.
+      Large changes to core subsystems = HIGH risk. Small localized fixes = LOW risk.
+
+   9. MAINLINE STABILITY
+      Has this been tested in mainline? Look for "Tested-by:", "Reviewed-by:", "Reported-by:" tags.
+      Older commits that have been in mainline for months are safer than brand new commits.
+
+   10. HISTORICAL COMMIT REVIEW
+       Examine the "Historical similar commits" section. Look for commits with similar characteristics - were they
+       backported or not? Learn from past decisions to maintain consistency.
+
+   CONDITIONAL DEEPER INVESTIGATION (use when needed - tools are free!):
+
+   - DEPENDENCY CHECK: Does this depend on other commits? Look for references to other commits in the message.
+     If you see function calls or APIs that look unfamiliar, use mcp__semcode__find_function to locate them,
+     or git log to see when they were introduced. Dependencies might mean the fix won't apply cleanly.
+
+   - API/ABI CHANGES: New syscalls, ioctls, /proc or /sys changes, UAPI changes, new module parameters?
+     These are generally NOT allowed in stable. Check include/uapi/ changes.
+
+   - SUBSYSTEM EXISTENCE: Does the affected code even exist in stable trees? If a driver was added in 6.8,
+     a fix for it can't go to 6.6 stable. Use git log --follow --diff-filter=A to see when files were added.
+     Use git blame to see when specific code was introduced.
+
+   - COMMIT HISTORY: For deeper context, use:
+     * git log --oneline path/to/file (see recent changes)
+     * git blame path/to/file (see when lines were modified)
+     * git show <commit-sha> (examine Fixes: target or related commits)
+     * git log --grep="keyword" (find related commits)
+
+   - CALL CHAIN ANALYSIS: To understand code path importance and impact, use semantic analysis:
+     * mcp__semcode__find_function: Locate function definitions
+     * mcp__semcode__find_callers: See all places that call a function (very useful for impact assessment!)
+     * mcp__semcode__find_calls: See what a function calls
+     * mcp__semcode__find_callchain: Trace full call chains
+     This helps you understand if a rarely-used or commonly-used code path is affected.
+
+   - PRACTICAL VS THEORETICAL: Is this a bug users actually hit? Look for "Reported-by:", "Link:" to bug reports,
+     or reproducers mentioned. Practical bugs with real-world impact are higher priority.
+
+   - COMPLETENESS: Is this a partial fix? Look for "part 1 of N", follow-up patches mentioned, or related commits.
+     Use git log --grep to find related commits.
+
+   REMEMBER:
+   - Be thorough. Use tools liberally to investigate - it costs nothing and improves accuracy.
+   - Present your final answer as **YES** or **NO** in bold.
+   - Provide a detailed explanation covering the key factors: what's fixed, severity, user impact, regression risk,
+     and how it aligns with stable kernel rules.
+   - Reference specific parts of the commit message or code that support your decision.
+
 1. READ THE COMMIT MESSAGE CAREFULLY:
    - What problem does it solve?
    - Is there a "Fixes:" tag? If so, check if that commit is in stable trees
@@ -561,12 +697,21 @@ New Commit to analyze:
 
 Based on your analysis of both the commit message and code changes, should this commit be backported to stable kernel trees?
 
-Provide your answer as YES or NO, followed by a detailed explanation that covers:
-1. What problem the commit solves and why it matters to stable users
-2. Whether it meets the stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
-3. The risk vs benefit trade-off (severity of bug vs risk of regression)
-4. Any concerns or caveats (dependencies, need for backport adjustments, affected versions)
-5. References to specific parts of the code or commit message that inform your decision
+YOUR RESPONSE STRUCTURE:
+1. Start by presenting your comprehensive TODO list (from STEP 0 above) - this shows your analysis plan
+2. Work through each TODO item systematically, marking them as [x] when completed
+3. Reference the TODO items as you analyze (e.g., "Addressing TODO: Check for Fixes tag...")
+4. Provide your final answer as YES or NO (formatted prominently, preferably as **YES** or **NO**)
+5. Include a detailed explanation that covers:
+   - What problem the commit solves and why it matters to stable users
+   - Whether it meets the stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
+   - The risk vs benefit trade-off (severity of bug vs risk of regression)
+   - Any concerns or caveats (dependencies, need for backport adjustments, affected versions)
+   - References to specific parts of the code or commit message that inform your decision
+   - Summary of which TODO items influenced your decision
+
+The comprehensive TODO list approach ensures you don't miss critical aspects of the analysis. By working through the checklist
+systematically, you demonstrate thorough evaluation and make your reasoning transparent and auditable.
 
 The goal is to identify all applicable fixes that stable users need, while avoiding regressions and unsuitable changes."#;
 
