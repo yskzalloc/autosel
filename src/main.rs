@@ -122,21 +122,17 @@ fn main() {
     let prompt_dir = matches.get_one::<String>("make-prompt");
     let prompt_file = matches.get_one::<String>("send-prompt");
 
-    let model_dir_path = model_dir.map(|dir| Path::new(dir));
+    let model_dir_path = model_dir.map(Path::new);
     let vectorstore_dir = if let Some(model_path) = model_dir_path {
-        if !model_path.exists() {
-            if let Err(e) = fs::create_dir_all(model_path) {
-                error!("Failed to create model directory: {e}");
-                std::process::exit(1);
-            }
+        if !model_path.exists() && let Err(e) = fs::create_dir_all(model_path) {
+            error!("Failed to create model directory: {e}");
+            std::process::exit(1);
         }
-        
+
         let vstore_dir = model_path.join("vectorstore");
-        if !vstore_dir.exists() {
-            if let Err(e) = fs::create_dir_all(&vstore_dir) {
-                error!("Failed to create vectorstore directory: {e}");
-                std::process::exit(1);
-            }
+        if !vstore_dir.exists() && let Err(e) = fs::create_dir_all(&vstore_dir) {
+            error!("Failed to create vectorstore directory: {e}");
+            std::process::exit(1);
         }
         Some(vstore_dir)
     } else {
@@ -264,35 +260,34 @@ fn main() {
             // Set debug logging for verbose mode
             if verbose {
                 for provider in &llm_providers {
-                    if let Some(config) = classifier.llm_configs.get_mut(provider) {
-                        if let Some(obj) = config.as_object_mut() {
-                            obj.insert("debug_logging".to_string(), serde_json::json!(true));
-                        }
+                    if let Some(config) = classifier.llm_configs.get_mut(provider)
+                        && let Some(obj) = config.as_object_mut()
+                    {
+                        obj.insert("debug_logging".to_string(), serde_json::json!(true));
                     }
                 }
             }
 
             // Configure Ollama parameters if provided
-            if classifier.llm_providers.contains(&"ollama".to_string()) {
-                if let Some(config) = classifier.llm_configs.get_mut("ollama") {
-                    if let Some(obj) = config.as_object_mut() {
-                        // Set Ollama server URL if provided
-                        if let Some(ollama_server) = matches.get_one::<String>("ollama-server") {
-                            obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
-                        }
+            if classifier.llm_providers.contains(&"ollama".to_string())
+                && let Some(config) = classifier.llm_configs.get_mut("ollama")
+                && let Some(obj) = config.as_object_mut()
+            {
+                // Set Ollama server URL if provided
+                if let Some(ollama_server) = matches.get_one::<String>("ollama-server") {
+                    obj.insert("api_host".to_string(), serde_json::json!(ollama_server));
+                }
 
-                        // Set Ollama model if provided
-                        if let Some(ollama_model) = matches.get_one::<String>("ollama-model") {
-                            // Check if it's a built-in model or custom
-                            let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model.as_str());
+                // Set Ollama model if provided
+                if let Some(ollama_model) = matches.get_one::<String>("ollama-model") {
+                    // Check if it's a built-in model or custom
+                    let is_builtin = ["llama3", "mistral", "gemma"].contains(&ollama_model.as_str());
 
-                            if is_builtin {
-                                obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
-                            } else {
-                                // For custom models, we'll set it as a custom model name
-                                obj.insert("custom_model".to_string(), serde_json::json!(ollama_model));
-                            }
-                        }
+                    if is_builtin {
+                        obj.insert("model_type".to_string(), serde_json::json!(ollama_model));
+                    } else {
+                        // For custom models, we'll set it as a custom model name
+                        obj.insert("custom_model".to_string(), serde_json::json!(ollama_model));
                     }
                 }
             }
@@ -366,7 +361,7 @@ fn main() {
 
             match collector.get_commit_features(sha) {
                 Some(features) => {
-                    if let Some(dir) = prompt_dir.as_deref() {
+                    if let Some(dir) = prompt_dir {
                         let commit_text = classifier::BackportClassifier::format_commit_info(&features);
 
                         let similar_commits = if model_dir_path.is_some() {
@@ -385,11 +380,9 @@ fn main() {
                         let prompt = classifier::BackportClassifier::construct_prompt(&commit_text, &similar_commits);
 
                         let prompt_dir_path = Path::new(dir);
-                        if !prompt_dir_path.exists() {
-                            if let Err(e) = fs::create_dir_all(prompt_dir_path) {
-                                error!("Failed to create prompt directory: {e}");
-                                continue;
-                            }
+                        if !prompt_dir_path.exists() && let Err(e) = fs::create_dir_all(prompt_dir_path) {
+                            error!("Failed to create prompt directory: {e}");
+                            continue;
                         }
 
                         let filename = format!("{sha}.txt");
@@ -414,10 +407,10 @@ fn main() {
                                 if let Some(dir) = explanation_dir {
                                     let explanation_dir_path = Path::new(dir);
 
-                                    if !explanation_dir_path.exists() {
-                                        if let Err(e) = fs::create_dir_all(explanation_dir_path) {
-                                            error!("Failed to create explanation directory: {e}");
-                                        }
+                                    if !explanation_dir_path.exists()
+                                        && let Err(e) = fs::create_dir_all(explanation_dir_path)
+                                    {
+                                        error!("Failed to create explanation directory: {e}");
                                     }
 
                                     let filename = format!("{sha}.txt");
@@ -650,10 +643,8 @@ fn main() {
         }
     }
 
-    if matches.contains_id("make-prompt") {
-        if let Some(dir) = prompt_dir.as_deref() {
-            info!("All prompts saved to directory: {dir}");
-        }
+    if matches.contains_id("make-prompt") && let Some(dir) = prompt_dir {
+        info!("All prompts saved to directory: {dir}");
     }
 
     if !matches.get_flag("train") && !matches.contains_id("commit") && !matches.contains_id("commits") &&
@@ -665,11 +656,9 @@ fn main() {
 fn save_explanation(dir: &str, file_stem: &str, provider_results: &HashMap<String, ProviderResult>) {
     let explanation_dir_path = Path::new(dir);
 
-    if !explanation_dir_path.exists() {
-        if let Err(e) = fs::create_dir_all(explanation_dir_path) {
-            error!("Failed to create explanation directory: {e}");
-            return;
-        }
+    if !explanation_dir_path.exists() && let Err(e) = fs::create_dir_all(explanation_dir_path) {
+        error!("Failed to create explanation directory: {e}");
+        return;
     }
 
     let filename = format!("{file_stem}.txt");

@@ -258,10 +258,10 @@ impl BackportClassifier {
                 let batch_texts = texts[batch_start..batch_end].to_vec();
                 let batch_metadatas = metadatas[batch_start..batch_end].to_vec();
 
-                if let Some(vs) = &mut self.vectorstore {
-                    if let Err(e) = vs.add_texts(batch_texts, Some(batch_metadatas)) {
-                        warn!("Failed to add batch to vectorstore: {e}");
-                    }
+                if let Some(vs) = &mut self.vectorstore
+                    && let Err(e) = vs.add_texts(batch_texts, Some(batch_metadatas))
+                {
+                    warn!("Failed to add batch to vectorstore: {e}");
                 }
 
                 pb.inc(batch_size as u64);
@@ -283,12 +283,12 @@ impl BackportClassifier {
 
     pub fn save_model(&self, model_path: &Path) -> Result<(), String> {
         // Save the vectorstore first if it exists
-        if let Some(vectorstore) = &self.vectorstore {
-            if let Some(persist_dir) = &self.persist_directory {
-                debug!("Saving vectorstore to {}", persist_dir.display());
-                if let Err(e) = vectorstore.persist(persist_dir) {
-                    return Err(format!("Failed to save vectorstore: {e}"));
-                }
+        if let Some(vectorstore) = &self.vectorstore
+            && let Some(persist_dir) = &self.persist_directory
+        {
+            debug!("Saving vectorstore to {}", persist_dir.display());
+            if let Err(e) = vectorstore.persist(persist_dir) {
+                return Err(format!("Failed to save vectorstore: {e}"));
             }
         }
 
@@ -425,72 +425,45 @@ IMPORTANT EXCEPTIONS (things that ARE allowed in stable despite being "additions
 
 2. QUIRKS and WORKAROUNDS:
    - Hardware-specific quirks for broken/buggy devices
-   - Suspend/resume quirks
-   - USB quirks for non-compliant devices
-   - PCI quirks for misconfigured hardware
+   - Suspend/resume quirks, USB quirks for non-compliant devices, PCI quirks for misconfigured hardware
    - Example: "USB: quirks: Add USB_QUIRK_DELAY_INIT for device 0x1234:0x5678"
    - These fix real-world hardware issues even though they add code
 
 3. DEVICE TREE (DT) UPDATES:
-   - DT binding additions for existing hardware
-   - DT fixes for incorrect hardware descriptions
+   - DT binding additions for existing hardware, DT fixes for incorrect hardware descriptions
    - Enabling already-supported hardware on new boards
    - Usually safe because they only affect specific ARM/embedded platforms
 
 4. BUILD FIXES:
-   - Fixes for compilation errors or warnings
-   - Kconfig dependency fixes
-   - Include file fixes
+   - Fixes for compilation errors or warnings, Kconfig dependency fixes, include file fixes
    - These are critical for users who need to build the kernel
 
-5. KCONFIG CHANGES:
-   - Enabling already-existing features that were incorrectly disabled
-   - Fixing Kconfig dependencies that prevent builds
-   - Not for enabling experimental features
-
-6. TRIVIAL SUBSYSTEM-SPECIFIC ADDITIONS:
-   - New trivial driver support for widely-deployed hardware (rare, case-by-case)
-   - New simple device support if the alternative is broken hardware
-   - Usually requires maintainer blessing
-
-7. DOCUMENTATION and COMMENT FIXES:
-   - Fixing incorrect documentation
-   - Updating obsolete comments
+5. DOCUMENTATION and COMMENT FIXES:
+   - Fixing incorrect documentation, updating obsolete comments
    - Zero risk of runtime regression
-
-8. STABLE-SPECIFIC BACKPORTS:
-   - Sometimes a mainline fix requires backporting with modifications
-   - May need additional context or helper patches
-   - Should still follow the spirit of stable rules
 
 WHEN EXCEPTIONS DON'T APPLY:
 - Adding a new driver entirely (almost never stable material)
 - Adding new userspace-visible APIs or syscalls (never stable material)
 - Adding new module parameters that change behavior (risky)
 - Enabling experimental or staging features (not for stable)
-- New features that aren't fixing broken hardware (not for stable)
 
-WHAT MAKES A GOOD BACKPORT CANDIDATE:
+BACKPORT SIGNALS:
 
 STRONG YES signals:
-- Fixes crashes, panics, or oopses that users can trigger
-- Fixes data corruption or filesystem issues
-- Fixes security vulnerabilities (especially with CVE)
-- Fixes deadlocks or livelocks
-- Fixes memory leaks in commonly-used code paths
+- Fixes crashes, panics, oopses, data corruption, filesystem issues, security vulnerabilities (especially with CVE)
+- Fixes deadlocks, livelocks, or memory leaks in commonly-used code paths
 - Has "Cc: stable@vger.kernel.org" tag (maintainer explicitly wants it in stable)
 - Has "Fixes:" tag pointing to a commit that's in the stable tree
-- Small, surgical fix with clear scope
-- Already tested in mainline for several weeks/months
+- Small, surgical fix with clear scope; already tested in mainline
 - Adds device IDs to existing drivers (PCI, USB, ACPI IDs)
 - Adds hardware quirks/workarounds for broken devices
-- Build fixes that prevent compilation
-- Device tree updates for existing hardware
+- Build fixes that prevent compilation; device tree updates for existing hardware
 
 STRONG NO signals:
 - Adds new features that aren't fixing real hardware issues
 - Adds new APIs or changes userspace-visible behavior
-- Adds entirely new drivers (use existing driver + device ID instead)
+- Adds entirely new drivers
 - Large refactoring or code reorganization
 - Changes that require other commits to work properly (dependencies)
 - Optimization-only changes that don't fix user-visible bugs
@@ -505,249 +478,88 @@ BORDERLINE CASES (need deeper analysis):
 - Fixes to rarely-used code paths
 - Fixes that partially solve a problem (incomplete fixes)
 - Changes that are large but fix critical issues
-- Fixes that require minor backport adjustments
 
 ANALYSIS WORKFLOW:
 
-STEP 0: COMPREHENSIVE ANALYSIS FRAMEWORK
-   Your analysis MUST be thorough and systematic. Work through each of these investigation areas carefully.
-   Don't skip steps - comprehensive analysis is critical for making the right backporting decision.
+Your analysis MUST be thorough and systematic. Work through these areas:
 
-   IMPORTANT: Tool usage is FREE and ENCOURAGED. Whenever you need more information, use the available tools:
-   git commands (git log, git blame, git show, git grep), semantic code analysis (mcp__semcode__* tools), or
-   any other tools that help understand the code better. Don't hesitate - investigate deeply!
+1. COMMIT MESSAGE ANALYSIS
+   - Parse the subject and body carefully for keywords: "fix", "crash", "deadlock", "corruption", "oops", "panic", "regression"
+   - Look for "Cc: stable@vger.kernel.org" or "Fixes:" tags - these are strong signals
+   - If there's a Fixes: tag, investigate that commit to understand when the bug was introduced
 
-   ESSENTIAL ANALYSIS AREAS (investigate all of these thoroughly):
+2. CODE CHANGE ANALYSIS
+   - Read the diff carefully line by line - don't just skim it
+   - Understand what the buggy code does and WHY it's wrong
+   - Explain the technical mechanism of the bug
+   - Identify the root cause (logic error, missing check, wrong order of operations, etc.)
+   - Assess: What does the fix change? Why does it solve the problem? Any edge cases?
 
-   1. COMMIT MESSAGE ANALYSIS
-      Parse the commit subject and body carefully. Look for keywords like "fix", "crash", "deadlock",
-      "corruption", "oops", "panic", "regression". Identify what problem is being solved and why it matters.
-      Look for "Cc: stable@vger.kernel.org" or "Fixes:" tags - these are strong signals.
-      If you see a Fixes: tag, note the commit SHA - you MUST investigate it in the next step.
+3. CLASSIFICATION
+   - Is this fixing a bug or adding a feature?
+   - Check for exception categories: device IDs, quirks, DT updates, build fixes, documentation
+   - Look for security indicators: "CVE-", "security", "vulnerability", "UAF", "buffer overflow", etc.
 
-   2. DEEP CODE RESEARCH (MANDATORY - DO NOT SKIP)
-      This is a REQUIRED step. You must conduct detailed research into the code and issue history:
+4. SCOPE AND RISK ASSESSMENT
+   - Count lines changed, files touched, complexity
+   - What subsystem is this in? How mature/stable is it?
+   - Could this fix break something else?
+   - Small localized fixes = LOW risk; large changes to core subsystems = HIGH risk
 
-      A. UNDERSTAND HOW THE BUG WAS INTRODUCED:
-         - If there's a Fixes: tag, use "git show <commit-sha>" to examine the commit that introduced the bug
-         - Use "git blame" on the affected files to see when the buggy code was added
-         - Use "git log" on the affected files to understand the evolution of the code
-         - Determine: When was this code introduced? What was the original intent? What changed?
+5. USER IMPACT
+   - Who is affected? Core kernel paths = HIGH impact; obscure drivers = LOW impact
+   - Is this a bug users actually hit? Look for "Reported-by:", "Link:" to bug reports
+   - How severe if the bug hits? (crash vs minor issue)
 
-      B. ANALYZE THE ACTUAL CODE IN DETAIL:
-         - Read the diff carefully line by line - don't just skim it
-         - Understand what the buggy code does and WHY it's wrong
-         - Explain the technical mechanism of the bug (e.g., "the code dereferences a pointer before checking
-           for NULL because...", "the race condition occurs when thread A modifies X while thread B reads it...")
-         - Identify the root cause at the code level (logic error, missing check, wrong order of operations, etc.)
+6. STABILITY INDICATORS
+   - Look for "Tested-by:", "Reviewed-by:" tags
+   - Older commits that have been in mainline for months are safer than brand new commits
 
-      C. EXPLAIN THE FIX:
-         - What does the fix change in the code?
-         - Why does this change solve the problem?
-         - Are there any subtle implications or edge cases?
+7. DEPENDENCY CHECK
+   - Does this depend on other commits?
+   - Does the affected code even exist in stable trees?
 
-      D. USE SEMANTIC ANALYSIS TOOLS:
-         - Use mcp__semcode__find_function to locate the functions being modified
-         - Use mcp__semcode__find_callers to see where these functions are called from
-         - Use mcp__semcode__find_calls to see what these functions call
-         - This helps you understand the context and potential impact
+8. HISTORICAL CONTEXT
+   - Examine "Historical similar commits" below - were similar commits backported?
 
-      E. RESEARCH THE SUBSYSTEM:
-         - What subsystem is this in? (networking, filesystem, driver, mm, scheduler, etc.)
-         - How mature/stable is this subsystem?
-         - Check git log on the directory to see how active development is
-
-      Your analysis MUST include:
-      - A clear technical explanation of what the bug is and how it manifests
-      - How the bug was introduced (cite specific commits if possible)
-      - Why the fix works at the code level
-      - Whether this is well-understood or complex/subtle
-
-      DO NOT PROCEED without completing this deep research. Use git commands and semantic tools liberally.
-      This understanding is essential for assessing whether the fix is "obviously correct" (a stable requirement).
-
-   3. SECURITY ASSESSMENT
-      Search for "CVE-", "security", "vulnerability", "exploit", "UAF", "use-after-free", "buffer overflow",
-      "integer overflow", "privilege escalation", "DoS", "memory safety". Any security issue is a STRONG YES signal.
-
-   4. FEATURE VS BUG FIX CLASSIFICATION
-      Is this fixing a bug or adding a feature? Keywords like "add support", "implement", "introduce", "enable new"
-      suggest features (usually NO). Keywords like "fix", "correct", "prevent", "avoid" suggest fixes (possibly YES).
-      BUT check for EXCEPTION CATEGORIES:
-      - Device ID additions (PCI/USB/ACPI IDs like "0x1234:0x5678") - USUALLY YES
-      - Hardware quirks/workarounds (look for "quirk", "workaround", "broken hardware") - USUALLY YES
-      - Device tree updates (.dts/.dtsi files) - USUALLY YES
-      - Build fixes (Kconfig, Makefile, #include, compilation errors) - USUALLY YES
-      - Documentation fixes (.rst, .txt, Documentation/) - USUALLY YES
-
-   5. CODE CHANGE SCOPE ASSESSMENT
-      Count lines changed, files touched, complexity. Small surgical fixes are safer. Large refactoring is risky.
-      The diff is in the "Changes:" section - analyze it carefully.
-
-   6. BUG TYPE AND SEVERITY (if this is a bug fix)
-      What kind of bug? Crash/panic/oops? Data corruption? Deadlock? Memory leak? Logic error? Race condition?
-      How severe? CRITICAL (crash, data loss, security)? HIGH (service disruption)? MEDIUM (malfunction)? LOW (cosmetic)?
-      Severity affects the risk/benefit calculation.
-
-   7. USER IMPACT EVALUATION
-      Who is affected? Core kernel paths and common drivers = HIGH impact. Obscure drivers = LOW impact.
-      Consider using git log to see how active the affected files are. If you're unsure about how widely
-      a function is used, use mcp__semcode__find_callers to see all call sites - this is very useful!
-
-   8. REGRESSION RISK ANALYSIS
-      Could this fix break something else? Consider size, complexity, subsystems touched, testing mentioned.
-      Large changes to core subsystems = HIGH risk. Small localized fixes = LOW risk.
-
-   9. MAINLINE STABILITY
-      Has this been tested in mainline? Look for "Tested-by:", "Reviewed-by:", "Reported-by:" tags.
-      Older commits that have been in mainline for months are safer than brand new commits.
-
-   10. HISTORICAL COMMIT REVIEW
-       Examine the "Historical similar commits" section. Look for commits with similar characteristics - were they
-       backported or not? Learn from past decisions to maintain consistency.
-
-   CONDITIONAL DEEPER INVESTIGATION (use when needed - tools are free!):
-
-   - DEPENDENCY CHECK: Does this depend on other commits? Look for references to other commits in the message.
-     If you see function calls or APIs that look unfamiliar, use mcp__semcode__find_function to locate them,
-     or git log to see when they were introduced. Dependencies might mean the fix won't apply cleanly.
-
-   - API/ABI CHANGES: New syscalls, ioctls, /proc or /sys changes, UAPI changes, new module parameters?
-     These are generally NOT allowed in stable. Check include/uapi/ changes.
-
-   - SUBSYSTEM EXISTENCE: Does the affected code even exist in stable trees? If a driver was added in 6.8,
-     a fix for it can't go to 6.6 stable. Use git log --follow --diff-filter=A to see when files were added.
-     Use git blame to see when specific code was introduced.
-
-   - COMMIT HISTORY: For deeper context, use:
-     * git log --oneline path/to/file (see recent changes)
-     * git blame path/to/file (see when lines were modified)
-     * git show <commit-sha> (examine Fixes: target or related commits)
-     * git log --grep="keyword" (find related commits)
-
-   - CALL CHAIN ANALYSIS: To understand code path importance and impact, use semantic analysis:
-     * mcp__semcode__find_function: Locate function definitions
-     * mcp__semcode__find_callers: See all places that call a function (very useful for impact assessment!)
-     * mcp__semcode__find_calls: See what a function calls
-     * mcp__semcode__find_callchain: Trace full call chains
-     This helps you understand if a rarely-used or commonly-used code path is affected.
-
-   - PRACTICAL VS THEORETICAL: Is this a bug users actually hit? Look for "Reported-by:", "Link:" to bug reports,
-     or reproducers mentioned. Practical bugs with real-world impact are higher priority.
-
-   - COMPLETENESS: Is this a partial fix? Look for "part 1 of N", follow-up patches mentioned, or related commits.
-     Use git log --grep to find related commits.
-
-   REMEMBER:
-   - Be thorough. Use tools liberally to investigate - it costs nothing and improves accuracy.
-   - Present your final answer as **YES** or **NO** in bold.
-   - Provide a detailed explanation covering the key factors: what's fixed, severity, user impact, regression risk,
-     and how it aligns with stable kernel rules.
-   - Reference specific parts of the commit message or code that support your decision.
-
-1. READ THE COMMIT MESSAGE CAREFULLY:
-   - What problem does it solve?
-   - Is there a "Fixes:" tag? If so, check if that commit is in stable trees
-   - Is there a "Cc: stable@vger.kernel.org" tag? (Strong signal for backporting)
-   - Does it mention a CVE, security issue, or bug report?
-   - Does it mention "new feature", "adds support", or "enable"? (Often disqualifying)
-   - Check for exception cases: device IDs, quirks, DT updates, build fixes
-
-2. EXAMINE THE CODE CHANGES:
-   - How many lines changed? (Smaller is better)
-   - How many files affected? (Fewer is better)
-   - Does it add new exports, new APIs, or new functionality?
-   - Is it just adding PCI/USB/ACPI IDs? (Exception: usually OK)
-   - Is it adding quirks for specific hardware? (Exception: usually OK)
-   - Is it a build fix or documentation fix? (Exception: usually OK)
-   - Is it fixing a logic error, off-by-one, use-after-free, null deref, etc?
-   - Does it require other commits to make sense?
-
-3. ASSESS IMPACT AND RISK:
-   - How commonly is the affected code used?
-   - Can users trigger the bug, or is it only in rare scenarios?
-   - What's the severity if the bug hits? (crash vs minor issue)
-   - What's the risk of the fix causing regressions?
-   - Has this been in mainline long enough to be tested?
-
-4. USE AVAILABLE TOOLS TO INVESTIGATE:
-   You have access to the Linux kernel repository in the current working directory.
-
-   Basic tools:
-   - git log, git blame: Check history and related commits
-   - grep: Search for patterns in code
-   - git show: Examine specific commits
-
-   Advanced tools (if available):
-   - mcp__semcode__* tools: For semantic code analysis (find callers, trace call chains, etc.)
-   - kernel-code-researcher agent: To investigate design decisions and history
-
-   Use these tools to understand the code context, but remember: they are aids to your analysis, not replacements for
-   understanding stable kernel backporting principles.
+For deeper investigation, you can use git commands:
+- git log, git blame: Check history and related commits
+- git show <sha>: Examine specific commits (especially Fixes: targets)
+- git log --follow --diff-filter=A: See when files were added
 
 Historical similar commits and their backport status for reference:
 {context}
 
 IMPORTANT: Pay close attention to the Backport Status (YES/NO) of similar commits as they provide valuable reference points.
-Commits with similar characteristics to those marked with "Backport Status: YES" are more likely to be suitable for backporting.
 
 New Commit to analyze:
 {commit_info}
 
-Based on your analysis of both the commit message and code changes, should this commit be backported to stable kernel trees?
+Based on your analysis, should this commit be backported to stable kernel trees?
 
 ========================================
-CRITICAL RESPONSE FORMAT REQUIREMENTS:
+RESPONSE FORMAT REQUIREMENTS:
 ========================================
 
-You MUST format your response EXACTLY as shown below. This format is REQUIRED for automated parsing.
-
-YOUR RESPONSE STRUCTURE:
-1. Provide your comprehensive analysis covering all the investigation areas mentioned above
-2. Work through TODO items systematically
-3. Include detailed explanation covering:
+Your response must include:
+1. Comprehensive analysis covering the areas above
+2. Detailed explanation of:
    - What problem the commit solves and why it matters to stable users
    - Whether it meets stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
-   - Risk vs benefit trade-off (severity of bug vs risk of regression)
-   - Any concerns or caveats (dependencies, need for backport adjustments, affected versions)
-   - References to specific parts of the code or commit message
+   - Risk vs benefit trade-off
+   - Any concerns (dependencies, backport adjustments needed, affected versions)
 
-FINAL LINE - Your decision (choose ONE):
-After all your analysis, the VERY LAST LINE of your response must be EXACTLY:
-**YES**
-OR
-**NO**
+FINAL LINE - Your decision:
+The VERY LAST LINE of your response must be EXACTLY **YES** or **NO** (nothing else after it).
 
-That's it - just **YES** or **NO** on the last line by itself. Nothing else after it.
-
-CORRECT EXAMPLES:
------------------
-Example 1:
-[comprehensive analysis here...]
-
-This commit fixes a critical use-after-free bug that causes kernel panics in production.
-The fix is small, surgical, and has been tested in mainline for 3 months without issues.
-It meets all stable kernel criteria.
+Example endings:
+...The fix is small, surgical, and meets all stable kernel criteria.
 
 **YES**
 
-Example 2:
-[comprehensive analysis here...]
-
-This commit adds a new feature rather than fixing a bug. While useful, it introduces
-new functionality that is not appropriate for stable trees according to the documented rules.
-There is no existing broken behavior being fixed.
+...This adds new functionality that is not appropriate for stable trees.
 
 **NO**
-
-INCORRECT EXAMPLES (DO NOT DO THIS):
-------------------------------------
-- Ending with "Based on my analysis, **YES**" 
-- Ending with "**Decision: YES**"
-- Putting **YES** or **NO** in the middle of analysis
-- Having text after the final **YES** or **NO**
-
-The goal is to identify all applicable fixes that stable users need, while avoiding regressions and unsuitable changes.
 
 REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
 
@@ -965,6 +777,7 @@ REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
 
     // Parse LLM response to extract decision and explanation
     // The prompt requires the response to END with **YES** or **NO** on the last line
+    // but we have fallback patterns for LLMs that don't follow the format exactly
     pub fn parse_llm_response(response: &str) -> (bool, String) {
         // First, filter out any content inside <think> blocks
         let filtered_response = if response.contains("<think>") && response.contains("</think>") {
@@ -999,67 +812,138 @@ REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
         }
 
         let trimmed = filtered_response.trim();
-        
+
         // Find the last non-empty line - this is where the decision should be
-        let last_line = trimmed.lines()
+        // Use trimmed version for finding the line
+        let last_line_trimmed = trimmed.lines()
             .rev()
             .find(|line| !line.trim().is_empty())
             .unwrap_or("")
             .trim();
 
+        // PRIORITY 1: Check for exact format on last line (highest priority)
         // The prompt explicitly requires **YES** or **NO** on the last line
-        // Check for exact format first
-        if last_line == "**YES**" {
+        // Bold patterns allow surrounding whitespace
+        if last_line_trimmed == "**YES**" {
             return (true, filtered_response.to_string());
         }
-        if last_line == "**NO**" {
+        if last_line_trimmed == "**NO**" {
             return (false, filtered_response.to_string());
         }
-        
-        // Fallback: Maybe the LLM used plain text without formatting
-        if last_line == "YES" {
+
+        // For plain YES/NO, check the raw last line - must be at start of line (no leading whitespace)
+        // This prevents false positives from indented text like "\t\tYES\t\t"
+        let last_line_raw = filtered_response.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("");
+
+        if last_line_raw == "YES" || last_line_raw.starts_with("YES ") {
             return (true, filtered_response.to_string());
         }
-        if last_line == "NO" {
+        if last_line_raw == "NO" || last_line_raw.starts_with("NO ") {
             return (false, filtered_response.to_string());
         }
 
         // If we get here, the LLM didn't follow the format correctly
-        // Log a warning and try to find YES/NO anywhere in the response
-        warn!("LLM response did not end with **YES** or **NO** as required. Last line: '{}'", last_line);
-        
-        // Scan backwards from the end looking for **YES** or **NO**
+        // Log a warning and try fallback patterns
+        warn!("LLM response did not end with **YES** or **NO** as required. Last line: '{}'", last_line_trimmed);
+
+        // PRIORITY 2: Scan for **YES** or **NO** anywhere (bold patterns win)
         // Skip lines that look like checklist items (contain ":**")
-        for line in trimmed.lines().rev() {
+        // Scan forwards to find the FIRST standalone bold pattern
+        for line in trimmed.lines() {
             let line_trimmed = line.trim();
-            
+
             // Skip empty lines
             if line_trimmed.is_empty() {
                 continue;
             }
-            
-            // Skip checklist items
+
+            // Skip checklist items (e.g., "- **Tested:** YES")
             if line_trimmed.contains(":**") {
                 continue;
             }
-            
-            if line_trimmed.contains("**YES**") {
+
+            // Check for standalone **YES** or **NO** (not part of longer bold text)
+            // Match **YES** at start of line or as whole token
+            if line_trimmed == "**YES**" || line_trimmed.starts_with("**YES** ") || line_trimmed.starts_with("**YES**\t") {
                 warn!("Found **YES** in response but not on last line");
                 return (true, filtered_response.to_string());
             }
-            if line_trimmed.contains("**NO**") {
+            if line_trimmed == "**NO**" || line_trimmed.starts_with("**NO** ") || line_trimmed.starts_with("**NO**\t") {
                 warn!("Found **NO** in response but not on last line");
                 return (false, filtered_response.to_string());
             }
         }
 
-        // Absolute last resort: check for keywords
-        if filtered_response.to_lowercase().contains("should not be backported") {
+        // PRIORITY 3: Check for markdown heading patterns (## YES / ## NO)
+        for line in trimmed.lines() {
+            let line_trimmed = line.trim();
+            if line_trimmed.starts_with("## YES") || line_trimmed.starts_with("##YES") {
+                warn!("Found ## YES markdown heading pattern");
+                return (true, filtered_response.to_string());
+            }
+            if line_trimmed.starts_with("## NO") || line_trimmed.starts_with("##NO") {
+                warn!("Found ## NO markdown heading pattern");
+                return (false, filtered_response.to_string());
+            }
+        }
+
+        // PRIORITY 4: Check for DECISION: YES / DECISION: NO patterns
+        for line in trimmed.lines() {
+            let line_upper = line.to_uppercase();
+            if line_upper.contains("DECISION: YES") || line_upper.contains("DECISION:YES") {
+                warn!("Found DECISION: YES pattern");
+                return (true, filtered_response.to_string());
+            }
+            if line_upper.contains("DECISION: NO") || line_upper.contains("DECISION:NO") {
+                warn!("Found DECISION: NO pattern");
+                return (false, filtered_response.to_string());
+            }
+        }
+
+        // PRIORITY 5: Check for plain YES/NO at start of line (no leading whitespace allowed)
+        // This is stricter than bold patterns to avoid false positives from indented text
+        for line in filtered_response.lines() {
+            // Check for YES at actual start of line (not indented), or YES followed by colon/comma/space
+            // Don't match if there's leading whitespace - that suggests it's not the main answer
+            if line == "YES"
+                || line.starts_with("YES:")
+                || line.starts_with("YES,")
+                || line.starts_with("YES ") {
+                warn!("Found plain YES pattern at start of line");
+                return (true, filtered_response.to_string());
+            }
+            if line == "NO"
+                || line.starts_with("NO:")
+                || line.starts_with("NO,")
+                || line.starts_with("NO ") {
+                warn!("Found plain NO pattern at start of line");
+                return (false, filtered_response.to_string());
+            }
+        }
+
+        // PRIORITY 6: Check for keyword patterns (negative patterns first)
+        let lower = filtered_response.to_lowercase();
+
+        // Negative keywords (check first)
+        if lower.contains("should not be backported") {
             warn!("Falling back to keyword 'should not be backported'");
             return (false, filtered_response.to_string());
         }
-        if filtered_response.to_lowercase().contains("should be backported") {
+        if lower.contains("do not recommend backporting") || lower.contains("not recommend backporting") {
+            warn!("Falling back to keyword 'do not recommend backporting'");
+            return (false, filtered_response.to_string());
+        }
+
+        // Positive keywords
+        if lower.contains("should be backported") {
             warn!("Falling back to keyword 'should be backported'");
+            return (true, filtered_response.to_string());
+        }
+        if lower.contains("recommend backporting") {
+            warn!("Falling back to keyword 'recommend backporting'");
             return (true, filtered_response.to_string());
         }
 

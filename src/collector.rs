@@ -82,14 +82,13 @@ impl BackportDataCollector {
 
             let version_parts: Vec<&str> = version.split('.').collect();
 
-            if version_parts.len() >= 2 {
-                if let (Ok(major), Ok(minor)) = (version_parts[0].parse::<i32>(), version_parts[1].parse::<i32>()) {
-                    if major < 4 || (major == 4 && minor < 4) {
-                        debug!("Skipping {branch} - older than linux-4.4.y");
-                        skipped_branches += 1;
-                        continue;
-                    }
-                }
+            if version_parts.len() >= 2
+                && let (Ok(major), Ok(minor)) = (version_parts[0].parse::<i32>(), version_parts[1].parse::<i32>())
+                && (major < 4 || (major == 4 && minor < 4))
+            {
+                debug!("Skipping {branch} - older than linux-4.4.y");
+                skipped_branches += 1;
+                continue;
             }
 
             filtered_branches.push(branch.clone());
