@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use log::{info, debug, warn, error};
-use regex::Regex;
 use indicatif::{ProgressBar, ProgressStyle};
 
 // Import from the commit-classifier library
@@ -697,23 +696,60 @@ New Commit to analyze:
 
 Based on your analysis of both the commit message and code changes, should this commit be backported to stable kernel trees?
 
+========================================
+CRITICAL RESPONSE FORMAT REQUIREMENTS:
+========================================
+
+You MUST format your response EXACTLY as shown below. This format is REQUIRED for automated parsing.
+
 YOUR RESPONSE STRUCTURE:
-1. Start by presenting your comprehensive TODO list (from STEP 0 above) - this shows your analysis plan
-2. Work through each TODO item systematically, marking them as [x] when completed
-3. Reference the TODO items as you analyze (e.g., "Addressing TODO: Check for Fixes tag...")
-4. Provide your final answer as YES or NO (formatted prominently, preferably as **YES** or **NO**)
-5. Include a detailed explanation that covers:
+1. Provide your comprehensive analysis covering all the investigation areas mentioned above
+2. Work through TODO items systematically
+3. Include detailed explanation covering:
    - What problem the commit solves and why it matters to stable users
-   - Whether it meets the stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
-   - The risk vs benefit trade-off (severity of bug vs risk of regression)
+   - Whether it meets stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
+   - Risk vs benefit trade-off (severity of bug vs risk of regression)
    - Any concerns or caveats (dependencies, need for backport adjustments, affected versions)
-   - References to specific parts of the code or commit message that inform your decision
-   - Summary of which TODO items influenced your decision
+   - References to specific parts of the code or commit message
 
-The comprehensive TODO list approach ensures you don't miss critical aspects of the analysis. By working through the checklist
-systematically, you demonstrate thorough evaluation and make your reasoning transparent and auditable.
+FINAL LINE - Your decision (choose ONE):
+After all your analysis, the VERY LAST LINE of your response must be EXACTLY:
+**YES**
+OR
+**NO**
 
-The goal is to identify all applicable fixes that stable users need, while avoiding regressions and unsuitable changes."#;
+That's it - just **YES** or **NO** on the last line by itself. Nothing else after it.
+
+CORRECT EXAMPLES:
+-----------------
+Example 1:
+[comprehensive analysis here...]
+
+This commit fixes a critical use-after-free bug that causes kernel panics in production.
+The fix is small, surgical, and has been tested in mainline for 3 months without issues.
+It meets all stable kernel criteria.
+
+**YES**
+
+Example 2:
+[comprehensive analysis here...]
+
+This commit adds a new feature rather than fixing a bug. While useful, it introduces
+new functionality that is not appropriate for stable trees according to the documented rules.
+There is no existing broken behavior being fixed.
+
+**NO**
+
+INCORRECT EXAMPLES (DO NOT DO THIS):
+------------------------------------
+- Ending with "Based on my analysis, **YES**" 
+- Ending with "**Decision: YES**"
+- Putting **YES** or **NO** in the middle of analysis
+- Having text after the final **YES** or **NO**
+
+The goal is to identify all applicable fixes that stable users need, while avoiding regressions and unsuitable changes.
+
+REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
 
         // Format the context from similar commits
         let mut context_parts = Vec::new();
@@ -928,6 +964,7 @@ The goal is to identify all applicable fixes that stable users need, while avoid
     }
 
     // Parse LLM response to extract decision and explanation
+    // The prompt requires the response to END with **YES** or **NO** on the last line
     pub fn parse_llm_response(response: &str) -> (bool, String) {
         // First, filter out any content inside <think> blocks
         let filtered_response = if response.contains("<think>") && response.contains("</think>") {
@@ -962,88 +999,72 @@ The goal is to identify all applicable fixes that stable users need, while avoid
         }
 
         let trimmed = filtered_response.trim();
+        
+        // Find the last non-empty line - this is where the decision should be
+        let last_line = trimmed.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim();
 
-        // First priority: Check for markdown bold patterns at the start
-        // These take precedence over plain text patterns
-        // Check for patterns like **YES**, **Answer: YES**, **Answer: NO**, etc.
-        if let Some(_caps) = Regex::new(r"^\*\*[^*]*\bYES\b[^*]*\*\*").unwrap().captures(trimmed) {
+        // The prompt explicitly requires **YES** or **NO** on the last line
+        // Check for exact format first
+        if last_line == "**YES**" {
             return (true, filtered_response.to_string());
         }
-        if let Some(_caps) = Regex::new(r"^\*\*[^*]*\bNO\b[^*]*\*\*").unwrap().captures(trimmed) {
+        if last_line == "**NO**" {
             return (false, filtered_response.to_string());
         }
-
-        // Check for bold patterns anywhere in the response using regex
-        // Find the FIRST occurrence of either **YES** or **NO** pattern
-        let bold_yes_pattern = Regex::new(r"\*\*[^*]*\bYES\b[^*]*\*\*").unwrap();
-        let bold_no_pattern = Regex::new(r"\*\*[^*]*\bNO\b[^*]*\*\*").unwrap();
-
-        // Find the position of first YES and NO patterns
-        let yes_pos = bold_yes_pattern.find(&filtered_response).map(|m| m.start());
-        let no_pos = bold_no_pattern.find(&filtered_response).map(|m| m.start());
-
-        // Use whichever pattern appears first
-        match (yes_pos, no_pos) {
-            (Some(y), Some(n)) => {
-                if y < n {
-                    return (true, filtered_response.to_string());
-                } else {
-                    return (false, filtered_response.to_string());
-                }
-            },
-            (Some(_), None) => return (true, filtered_response.to_string()),
-            (None, Some(_)) => return (false, filtered_response.to_string()),
-            (None, None) => {} // Continue to next pattern check
-        }
-
-        // Second priority: Look for "DECISION: YES" or "DECISION: NO" as reliable indicators
-        if filtered_response.contains("DECISION: YES") {
+        
+        // Fallback: Maybe the LLM used plain text without formatting
+        if last_line == "YES" {
             return (true, filtered_response.to_string());
-        } else if filtered_response.contains("DECISION: NO") {
+        }
+        if last_line == "NO" {
             return (false, filtered_response.to_string());
         }
 
-        // Third priority: Check for markdown heading patterns ## YES or ## NO
-        if trimmed.starts_with("## YES") {
-            return (true, filtered_response.to_string());
-        } else if trimmed.starts_with("## NO") {
-            return (false, filtered_response.to_string());
+        // If we get here, the LLM didn't follow the format correctly
+        // Log a warning and try to find YES/NO anywhere in the response
+        warn!("LLM response did not end with **YES** or **NO** as required. Last line: '{}'", last_line);
+        
+        // Scan backwards from the end looking for **YES** or **NO**
+        // Skip lines that look like checklist items (contain ":**")
+        for line in trimmed.lines().rev() {
+            let line_trimmed = line.trim();
+            
+            // Skip empty lines
+            if line_trimmed.is_empty() {
+                continue;
+            }
+            
+            // Skip checklist items
+            if line_trimmed.contains(":**") {
+                continue;
+            }
+            
+            if line_trimmed.contains("**YES**") {
+                warn!("Found **YES** in response but not on last line");
+                return (true, filtered_response.to_string());
+            }
+            if line_trimmed.contains("**NO**") {
+                warn!("Found **NO** in response but not on last line");
+                return (false, filtered_response.to_string());
+            }
         }
 
-        // Fourth priority: Check for plain NO: pattern at the beginning
-        if trimmed.starts_with("NO:") {
+        // Absolute last resort: check for keywords
+        if filtered_response.to_lowercase().contains("should not be backported") {
+            warn!("Falling back to keyword 'should not be backported'");
             return (false, filtered_response.to_string());
         }
-
-        // Fifth priority: Look for plain YES or NO patterns
-        // Use multiline mode (?m) and account for whitespace and colons
-        let yes_pattern = Regex::new(r"(?m)^YES|^YES[,.:;]|\nYES\n|\nYES[,.:;]|^[ \t]*YES:|^[ \t]*YES[ \t]*:").unwrap();
-        let no_pattern = Regex::new(r"(?m)^NO|^NO[,.:;]|\nNO\n|\nNO[,.:;]|^[ \t]*NO:|^[ \t]*NO[ \t]*:").unwrap();
-
-        if yes_pattern.is_match(&filtered_response) {
-            return (true, filtered_response.to_string());
-        } else if no_pattern.is_match(&filtered_response) {
-            return (false, filtered_response.to_string());
-        }
-
-        // If no clear YES/NO, look for keywords
-        // Check negative patterns first since they are more specific
-        let should_not_backport = filtered_response.to_lowercase().contains("should not be backported") ||
-                                filtered_response.to_lowercase().contains("not recommend backporting");
-
-        if should_not_backport {
-            return (false, filtered_response.to_string());
-        }
-
-        // Then check positive patterns
-        let should_backport = filtered_response.to_lowercase().contains("should be backported") ||
-                            filtered_response.to_lowercase().contains("recommend backporting");
-
-        if should_backport {
+        if filtered_response.to_lowercase().contains("should be backported") {
+            warn!("Falling back to keyword 'should be backported'");
             return (true, filtered_response.to_string());
         }
 
-        // Default fallback - consider it not backportable unless clearly indicated
+        // Give up - treat as NO to be conservative
+        error!("Could not parse LLM response - no clear YES or NO found. Defaulting to NO.");
         (false, filtered_response.to_string())
     }
 
@@ -1158,9 +1179,9 @@ This is some thinking that should be ignored.
 It might contain YES or NO but should not affect the result.
 </think>
 
-**NO**
+The commit should not be backported because it introduces new features.
 
-The commit should not be backported because it introduces new features."#;
+**NO**"#;
 
         let (should_backport, explanation) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
@@ -1169,85 +1190,38 @@ The commit should not be backported because it introduces new features."#;
     }
 
     #[test]
-    fn test_parse_llm_response_bold_patterns_at_start() {
-        // Test bold YES at the start
-        let response = "**YES**\n\nThis commit fixes a critical bug.";
+    fn test_parse_llm_response_decision_at_end() {
+        // Test bold YES at the end
+        let response = "This commit fixes a critical bug.\n\n**YES**";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, true);
 
-        // Test bold NO at the start
-        let response = "**NO**\n\nThis commit adds new features.";
+        // Test bold NO at the end
+        let response = "This commit adds new features.\n\n**NO**";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
 
-        // Test bold Answer: YES pattern
-        let response = "**Answer: YES**\n\nThis should be backported.";
+        // Test plain YES at the end
+        let response = "This should be backported.\n\nYES";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, true);
 
-        // Test bold Answer: NO pattern
-        let response = "**Answer: NO**\n\nThis should not be backported.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, false);
-    }
-
-    #[test]
-    fn test_parse_llm_response_bold_patterns_priority() {
-        // Test that bold YES takes priority over plain NO
-        let response = "Some analysis here.\n\n**YES**\n\nBut also mentions NO later.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, true);
-
-        // Test that bold NO takes priority over plain YES
-        let response = "YES might be mentioned here.\n\n**NO**\n\nBut the final answer is no.";
+        // Test plain NO at the end
+        let response = "This should not be backported.\n\nNO";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
     }
 
     #[test]
-    fn test_parse_llm_response_decision_pattern() {
-        // Test DECISION: YES pattern
-        let response = "After careful analysis...\n\nDECISION: YES\n\nThis should be backported.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, true);
-
-        // Test DECISION: NO pattern
-        let response = "After careful analysis...\n\nDECISION: NO\n\nThis should not be backported.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, false);
-    }
-
-    #[test]
-    fn test_parse_llm_response_plain_patterns() {
-        // Test plain YES at start
-        let response = "YES\n\nThis commit fixes a security issue.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, true);
-
-        // Test plain NO at start
-        let response = "NO\n\nThis commit is too risky.";
+    fn test_parse_llm_response_with_checklist_items() {
+        // Test that checklist items with YES/NO are skipped, and final decision is used
+        let response = "Analysis:\n- **Tested:** YES\n- **Real bug:** NO\n\nConclusion: This is a feature.\n\n**NO**";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
 
-        // Test NO: pattern at beginning
-        let response = "NO: This commit introduces new functionality.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, false);
-
-        // Test YES: pattern with spaces
-        let response = "  YES: This is a critical fix.";
+        let response = "Rules check:\n- **Fixes bug:** YES\n- **Security:** NO\n\nThis should be backported.\n\n**YES**";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, true);
-
-        // Test YES with punctuation
-        let response = "YES, this should be backported.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, true);
-
-        // Test NO with punctuation
-        let response = "NO, this is not suitable for stable.";
-        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
-        assert_eq!(should_backport, false);
     }
 
     #[test]
@@ -1467,5 +1441,43 @@ Nested <think>should still work</think> properly
         let response = "YES\nDECISION: YES\nI recommend backporting\n\n**NO**\n\nActually, no.";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert_eq!(should_backport, false);
+    }
+
+    #[test]
+    fn test_parse_llm_response_new_format_decision_first() {
+        // Test the new format where decision comes first
+        let response = r#"**YES**
+
+This commit fixes a critical memory corruption bug that affects all users of the subsystem.
+
+## Comprehensive Analysis
+
+### TODO Items
+- [x] Check for Cc: stable tag
+- [x] Assess impact and severity
+"#;
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true, "Should parse YES from first line");
+
+        let response = r#"**NO**
+
+This commit adds a new feature rather than fixing a bug, which violates stable kernel rules.
+
+## Detailed Analysis
+
+The commit introduces new functionality that is not appropriate for stable trees.
+"#;
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, false, "Should parse NO from first line");
+
+        // Test with extra text before the decision (should still work)
+        let response = r#"**YES** - This should be backported
+
+Brief summary: Fixes a critical bug affecting production systems.
+
+## Analysis Details
+..."#;
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert_eq!(should_backport, true, "Should handle YES with extra text on first line");
     }
 }
