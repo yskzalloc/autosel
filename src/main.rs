@@ -152,7 +152,7 @@ fn main() {
     }
 
     let expanded_kernel_repo = shellexpand::tilde(kernel_repo);
-    let kernel_repo_path = Path::new(expanded_kernel_repo.as_ref());
+    let kernel_repo_path = Path::new(expanded_kernel_repo.as_ref() as &str);
 
     let runtime = tokio::runtime::Runtime::new()
         .expect("Failed to create tokio runtime");
