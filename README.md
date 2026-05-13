@@ -5,7 +5,7 @@ AUTOSEL is a tool designed to automatically classify whether Linux kernel commit
 ## Features
 
 - Automated analysis of kernel commits to determine backport suitability
-- Support for multiple LLM providers (Claude, OpenAI, NVIDIA)
+- Support for multiple LLM providers (Claude, OpenAI, NVIDIA, Kiro)
 - Embeddings-based similar commit retrieval
 - Vector storage for efficient commit analysis
 - Batch processing capabilities
@@ -42,6 +42,9 @@ Set the following environment variables for the LLM providers you want to use:
 - `ANTHROPIC_API_KEY` - For Claude models
 - `OPENAI_API_KEY` - For OpenAI models (GPT-4, etc.)
 - `NVIDIA_API_KEY` - For NVIDIA models
+- `KIRO_API_KEY` - For Kiro (alternatively, use an existing `kiro-cli` browser login)
+
+For Kiro, no API key is needed if you already have an authenticated `kiro-cli` session (browser login). Set `KIRO_API_KEY` for headless/CI environments.
 
 ## Usage
 

@@ -39,7 +39,7 @@ fn main() {
         .arg(Arg::new("models")
             .long("models")
             .value_name("MODELS")
-            .help("Comma-separated list of models to use (claude, openai, nvidia, ollama)")
+            .help("Comma-separated list of models to use (claude, openai, nvidia, ollama, kiro)")
             .num_args(1))
         .arg(Arg::new("train")
             .long("train")
