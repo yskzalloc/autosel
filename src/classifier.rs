@@ -389,6 +389,17 @@ impl BackportClassifier {
         // Template for the prompt
         let prompt_template = r#"You are a Linux kernel expert analyzing commits to determine if they should be backported to stable kernel trees.
 
+CRITICAL: NEVER use "git log --all" or any git command with the --all flag. It searches hundreds of branches and takes hours. Use "git log" without --all, or specify a branch like "git log master".
+
+CRITICAL: EVERY COMMIT YOU ANALYZE IS A CANDIDATE - NOT YET SELECTED:
+You are evaluating whether this commit SHOULD be backported. It has NOT been selected yet.
+- IGNORE "[Upstream commit ...]" markers - these are added during candidate preparation
+- IGNORE "Signed-off-by: Sasha Levin" - this is added during candidate preparation
+- IGNORE any evidence that suggests the commit "is already selected" or "has been prepared for stable"
+- These markers do NOT mean the commit was selected - they are part of the evaluation pipeline
+- Your job is to make the YES/NO decision based purely on TECHNICAL MERIT of the fix itself
+- Do NOT say "this is already selected" or "this has been prepared for backport" - that's circular reasoning
+
 UNDERSTANDING STABLE KERNEL TREES:
 
 The Linux kernel stable trees (also known as -stable or LTS trees) are long-term supported versions that receive critical bug fixes
@@ -406,7 +417,7 @@ STABLE KERNEL RULES (from Documentation/process/stable-kernel-rules.rst):
 
 A patch must meet these criteria to be backported to stable:
 1. It must be obviously correct and tested
-2. It must fix a real bug that affects users (not theoretical races or cleanup)
+2. It must fix a real bug
 3. It must fix an important issue (security bug, data corruption, serious crash, deadlock, etc.)
 4. It must be small and contained (no large refactoring or architectural changes)
 5. It must NOT introduce new features or new APIs
@@ -448,81 +459,772 @@ WHEN EXCEPTIONS DON'T APPLY:
 - Adding new module parameters that change behavior (risky)
 - Enabling experimental or staging features (not for stable)
 
+HARDWARE QUIRK DETAILS:
+
+Hardware quirks are common in stable and deserve special attention:
+
+1. USB QUIRKS (drivers/usb/core/quirks.c):
+   - USB_QUIRK_NO_AUTOSUSPEND - device breaks on suspend
+   - USB_QUIRK_RESET_RESUME - needs reset after resume
+   - USB_QUIRK_DELAY_INIT - needs delay during enumeration
+   - USB_QUIRK_NO_BOS - hangs when BOS descriptor requested
+   - Format: { USB_DEVICE(vendor, product), .driver_info = QUIRK }
+
+2. PCI QUIRKS (drivers/pci/quirks.c):
+   - DECLARE_PCI_FIXUP_* macros for device-specific fixes
+   - Power management, BAR sizing, interrupt routing fixes
+
+3. INPUT DEVICE QUIRKS (drivers/input/serio/i8042-x86ia64io.h):
+   - Keyboard/touchpad initialization quirks
+   - DMI-based matching for specific laptops
+   - SERIO_QUIRK_NOMUX, SERIO_QUIRK_RESET_ALWAYS, etc.
+
+4. AUDIO CODEC QUIRKS (sound/pci/hda/patch_realtek.c):
+   - SND_PCI_QUIRK entries for specific laptop models
+   - Pin configuration, headphone detection fixes
+
+5. SFP/NETWORK QUIRKS:
+   - SFP_QUIRK_* for optical modules with broken behavior
+   - Vendor/model string matching
+
+These are all YES for stable - they fix real hardware for real users.
+
+BUG PATTERN RECOGNITION:
+
+These are the actual bug categories that get backported to stable (from analysis of 200+ stable commits).
+Learn to recognize them even when the commit message doesn't explicitly say "fix":
+
+1. USE-AFTER-FREE (UAF) - 4-6% of stable commits:
+   - Object freed while still referenced elsewhere
+   - Code patterns: kfree() moved after last use, adding refcount ops (get/put), NULL checks after free
+   - Adding synchronize_rcu(), rcu_read_lock() around access
+   - Keywords: "use after free", "UAF", "freed while", "still in use", "dangling pointer"
+   - Example: ksmbd UAF in session handling (commit 1067361a1cc6a)
+
+2. MEMORY LEAKS / RESOURCE LEAKS - 10-12% of stable commits:
+   - Missing free/release on error paths or normal exit paths
+   - Code patterns: Adding kfree/put_device/release in error handling, adding "goto cleanup"
+   - Often labeled as "cleanup" but actually fixes real leaks
+   - Common in USB (URB leaks), OF node references, driver probe paths
+   - Example: 4 identical CAN USB driver URB leak fixes (adec5e1f9c99f and 3 others)
+
+3. RACE CONDITIONS - 8-9% of stable commits:
+   - Concurrent access without proper synchronization
+   - Code patterns: Adding locks (spin_lock, mutex_lock, down_read/write)
+   - Adding memory barriers (smp_mb, smp_wmb, smp_rmb)
+   - WRITE_ONCE/READ_ONCE additions (KCSAN-detected data races)
+   - Often in registration/unregistration paths, list operations, state machines
+   - Example: NFSD registration vs exports_proc race (8120e420013d9)
+
+4. DOUBLE-FREE - 3% of stable commits:
+   - Same object freed twice
+   - Code patterns: Setting pointer to NULL after free, removing duplicate free calls
+   - Common with for_each_*() macros that call put internally, then goto cleanup also calls put
+   - Example: rockchip USB2 PHY double-free in probe (ebae26dd15140)
+
+5. NULL POINTER DEREFERENCES - 2-4% of stable commits:
+   - Accessing memory through NULL pointer
+   - Code patterns: Adding NULL checks before dereference, checking return values
+   - Often in error paths where allocation failed but code continues
+
+6. BUFFER OVERFLOWS / OUT-OF-BOUNDS - 1-2% of stable commits:
+   - Reading/writing beyond allocated bounds
+   - Code patterns: Array bounds checks, size validation, fixing size vs count confusion
+   - Example: ALSA scarlett2 buffer overflow - checked total size instead of element size (91a756d22f048)
+
+7. REFERENCE COUNTING BUGS - Common cause of UAF:
+   - Imbalanced get/put operations on reference-counted objects
+   - Code patterns: Adding missing put_*(), get_*(), *_get(), *_put() calls
+   - Functions: kobject_put, kref_put, dev_put, fput, dput, iput, of_node_put
+   - Missing put in error path = leak; extra put = UAF when refcount hits zero
+
+8. UNINITIALIZED DATA - 3-4% of stable commits:
+   - Using variables before initialization
+   - Code patterns: Adding initializers, kmem_cache_alloc -> kmem_cache_zalloc
+   - Detected by KMSAN - these reports indicate real bugs
+   - Example: ntfs3 uninitialized memory use (7d52c592cf53f)
+
+9. DEADLOCKS / LOCK ORDERING - 1-2% of stable commits:
+   - Circular lock dependencies or self-deadlock
+   - Code patterns: Changing lock acquisition order, expanding lock scope
+   - Example: hugetlb migration lock ordering fix (526394af4e8ad)
+
+10. ENDIANNESS / TYPE BUGS - 1-2% of stable commits:
+    - Wrong byte order or type size assumptions
+    - Code patterns: Adding cpu_to_le/be conversions, fixing GENMASK values
+    - Common in IIO sensors, network drivers
+
+SYZBOT AND FUZZER-FOUND BUGS:
+
+"Reported-by: syzbot" indicates a bug found by Google's kernel fuzzer. These are almost always
+backport-worthy because:
+- Syzbot only reports REPRODUCIBLE issues with a concrete trigger
+- The bug is reachable from syscalls (not theoretical)
+- Usually security-relevant (exploitable from userspace)
+
+Syzbot indicators:
+- "Reported-by: syzbot+<hash>@syzkaller.appspotmail.com"
+- "Link:" to syzkaller.appspot.com bug reports
+- Crash types mentioned: KASAN, KMSAN, KCSAN, UBSAN, BUG, WARNING
+
+SANITIZER REPORTS (KASAN/KMSAN/KCSAN/UBSAN):
+- KASAN: Memory safety (UAF, out-of-bounds) - HIGH priority
+- KMSAN: Uninitialized memory use - HIGH priority
+- KCSAN: Data race detection - MEDIUM-HIGH priority
+- UBSAN: Undefined behavior (overflows, shifts) - MEDIUM priority
+
+Commits fixing sanitizer-reported issues are strong YES candidates.
+
 BACKPORT SIGNALS:
 
+IMPORTANT: The commits you are reviewing do NOT have "Cc: stable@vger.kernel.org" or "Fixes:" tags - that's precisely
+WHY they need manual review. If they had those tags, they would be automatically selected without review. Therefore:
+- The ABSENCE of these tags is NOT a negative signal - it's expected for every commit you review
+- Do NOT use "lacks Fixes: tag" or "lacks Cc: stable tag" as a reason to vote NO
+- Your decision must be based purely on technical analysis of the patch itself
+
 STRONG YES signals:
-- Fixes crashes, panics, oopses, data corruption, filesystem issues, security vulnerabilities (especially with CVE)
-- Fixes deadlocks, livelocks, or memory leaks in commonly-used code paths
-- Has "Cc: stable@vger.kernel.org" tag (maintainer explicitly wants it in stable)
-- Has "Fixes:" tag pointing to a commit that's in the stable tree
+- Fixes crashes, panics, oopses, kernel BUGs, WARN_ON triggers, soft/hard lockups
+- Fixes data corruption, filesystem issues, security vulnerabilities (CVE)
+- Fixes deadlocks, livelocks, RCU stalls, hung tasks
+- Fixes memory leaks in commonly-used code paths (not one-time init leaks)
+- Fixes use-after-free, double-free, null pointer dereference
+- Fixes race conditions with concrete triggers (syzbot, user reports, code analysis)
+- Fixes reference counting bugs (missing get/put operations)
+- Fixes buffer overflows, out-of-bounds access, integer overflows
+- Fixes uninitialized data use (KMSAN reports)
 - Small, surgical fix with clear scope; already tested in mainline
-- Adds device IDs to existing drivers (PCI, USB, ACPI IDs)
-- Adds hardware quirks/workarounds for broken devices
-- Build fixes that prevent compilation; device tree updates for existing hardware
+- Adds device IDs to existing drivers (PCI, USB, ACPI, I2C IDs)
+- Adds hardware quirks/workarounds for broken devices (USB quirks, PCI quirks, codec quirks)
+- Build fixes that prevent compilation
+- Device tree updates for existing hardware
+- Reported by syzbot/syzkaller (fuzzer-found, reproducible bugs)
+- Has "Reported-by:" from multiple users (indicates real-world impact)
+- Fixes flagged by KASAN, KMSAN, KCSAN, UBSAN sanitizers
 
 STRONG NO signals:
 - Adds new features that aren't fixing real hardware issues
-- Adds new APIs or changes userspace-visible behavior
-- Adds entirely new drivers
-- Large refactoring or code reorganization
-- Changes that require other commits to work properly (dependencies)
-- Optimization-only changes that don't fix user-visible bugs
-- Changes to new code that doesn't exist in the stable tree
-- Theoretical race conditions with no known way to trigger them
-- Code cleanup without fixing actual bugs
+- Adds new APIs, syscalls, or changes userspace-visible behavior
+- Adds entirely new drivers (not device IDs to existing drivers)
+- Large refactoring or code reorganization (>100 lines across many files) without fixing a bug
+- Changes that require other commits to work (check for "patch X/Y" in subject)
+- Optimization-only changes that don't fix user-visible bugs or prevent lockups
+- Changes to new code that doesn't exist in stable trees (new subsystems added after branch point)
+- Code cleanup that doesn't fix an actual bug (pure style, whitespace, renaming)
 - Changes to staging drivers (usually not stable material)
-- Adds new module parameters or sysfs attributes
+- Adds new module parameters or sysfs attributes that change behavior
+- "Preparation" commits that just refactor for a future fix (no standalone value)
+- Reverts of commits not in stable (nothing to revert there)
+
+IMPORTANT NUANCES:
+- "Theoretical" races ARE backport-worthy if: the race window is realistic AND
+  consequences are severe (crash, corruption, security). Don't dismiss races just
+  because no one reported them - they may be hard to reproduce.
+- Performance fixes ARE backport-worthy if they prevent: soft lockups, hard lockups,
+  RCU stalls, or system hangs. These are stability issues, not optional optimizations.
+- "Cleanup" that adds error handling IS often a bug fix (fixing resource leaks).
+
+RECOGNIZING FIXES DISGUISED AS CLEANUP/IMPROVEMENT:
+
+Many real bug fixes are described as "cleanup", "improvement", or "simplify" but actually fix bugs.
+Dig deeper when you see these patterns:
+
+1. ERROR PATH CHANGES:
+   - "Clean up error handling" - Often fixes resource leaks on error paths
+   - Adding goto labels for cleanup - Usually fixing missing cleanup
+   - Adding rollback/undo operations - Fixing incomplete error recovery
+   - Question: Does this ensure ALL resources are freed on ALL error paths?
+
+2. INITIALIZATION CHANGES:
+   - "Initialize variable X" - Fixes uninitialized variable use
+   - "Zero-initialize structure" - Prevents info leaks or undefined behavior
+   - kmem_cache_alloc -> kmem_cache_zalloc - Fixing KMSAN-detected bug
+
+3. SYNCHRONIZATION CHANGES:
+   - "Clean up locking" - Often fixes races or deadlocks
+   - Moving lock scope - Fixing a race window
+   - Adding memory barriers - Fixing data races
+
+4. REFERENCE COUNTING CHANGES:
+   - "Balance refcount" - Fixes leak (missing put) or UAF (extra put)
+   - Adding *_put() call - This IS a bug fix
+
+5. RETURN VALUE CHECKING:
+   - "Add missing check for X" - Fixes NULL deref, overflow, or other bug
+   - "Handle error from Y" - Fixing ignored error that causes problems
+
+RULE OF THUMB: If the "cleanup" prevents ANY of these, it's a bug fix worth backporting:
+- Memory/resource leak
+- NULL pointer dereference
+- Use-after-free
+- Race condition
+- Data corruption
+- System hang
 
 BORDERLINE CASES (need deeper analysis):
 - Performance fixes that address user complaints
 - Fixes to rarely-used code paths
 - Fixes that partially solve a problem (incomplete fixes)
 - Changes that are large but fix critical issues
+- Reverts: Check if the original commit is in stable. If yes, revert is likely needed.
+  If no, the revert has nothing to revert in stable (NO).
+- Commits that fix issues introduced by OTHER stable commits (stable-to-stable fixes):
+  These are important - check if the broken commit went to stable.
+- Incomplete fix series: If commit says "patch 2/3", the fix may need other patches.
+  Check if it's self-contained or needs dependencies.
 
-ANALYSIS WORKFLOW:
+ANALYSIS WORKFLOW - MANDATORY INVESTIGATION CHECKLIST:
 
-Your analysis MUST be thorough and systematic. Work through these areas:
+You MUST work through EVERY step below in order. Do NOT skip steps. For each step,
+record your findings as instructed. If a step is genuinely not applicable (e.g., no
+Fixes: tag to follow), state why and move on. If a tool call fails, note the failure
+and what you could not verify.
 
-1. COMMIT MESSAGE ANALYSIS
-   - Parse the subject and body carefully for keywords: "fix", "crash", "deadlock", "corruption", "oops", "panic", "regression"
-   - Look for "Cc: stable@vger.kernel.org" or "Fixes:" tags - these are strong signals
-   - If there's a Fixes: tag, investigate that commit to understand when the bug was introduced
+This is a deep forensic investigation. You are not skimming - you are drilling down
+into every available data source to build a complete picture before making your decision.
+Spare no effort. Use every tool at your disposal. Leave no stone unturned.
 
-2. CODE CHANGE ANALYSIS
-   - Read the diff carefully line by line - don't just skim it
-   - Understand what the buggy code does and WHY it's wrong
-   - Explain the technical mechanism of the bug
-   - Identify the root cause (logic error, missing check, wrong order of operations, etc.)
-   - Assess: What does the fix change? Why does it solve the problem? Any edge cases?
+===============================================================
+PHASE 1: COMMIT MESSAGE FORENSICS
+===============================================================
 
-3. CLASSIFICATION
-   - Is this fixing a bug or adding a feature?
-   - Check for exception categories: device IDs, quirks, DT updates, build fixes, documentation
-   - Look for security indicators: "CVE-", "security", "vulnerability", "UAF", "buffer overflow", etc.
+Step 1.1: PARSE THE SUBJECT LINE
+  - Extract the subsystem prefix (e.g., "net: tcp:", "drm/i915:", "mm/slub:")
+  - Identify the action verb: "fix", "add", "remove", "refactor", "clean up",
+    "improve", "handle", "prevent", "ensure", "avoid", "correct"
+  - Note: verbs like "handle", "prevent", "ensure", "avoid", "correct" almost
+    always indicate a bug fix even if "fix" is not used
+  Record: [subsystem] [action verb] [one-line summary of claimed intent]
 
-4. SCOPE AND RISK ASSESSMENT
-   - Count lines changed, files touched, complexity
-   - What subsystem is this in? How mature/stable is it?
-   - Could this fix break something else?
-   - Small localized fixes = LOW risk; large changes to core subsystems = HIGH risk
+Step 1.2: PARSE ALL COMMIT MESSAGE TAGS
+  Extract and record EVERY tag present. Each tag type carries specific information:
 
-5. USER IMPACT
-   - Who is affected? Core kernel paths = HIGH impact; obscure drivers = LOW impact
-   - Is this a bug users actually hit? Look for "Reported-by:", "Link:" to bug reports
-   - How severe if the bug hits? (crash vs minor issue)
+  a) Fixes: <sha> ("commit title")
+     - This tells you EXACTLY which commit introduced the bug
+     - You MUST look up this commit later (Step 3.2)
+     - Note: absence of Fixes: tag is EXPECTED (that's why this commit needs review)
 
-6. STABILITY INDICATORS
-   - Look for "Tested-by:", "Reviewed-by:" tags
-   - Older commits that have been in mainline for months are safer than brand new commits
+  b) Reported-by: Name <email>
+     - Single reporter = someone hit this bug
+     - Multiple reporters = widespread real-world issue (strong YES signal)
+     - "syzbot+<hash>@syzkaller.appspotmail.com" = fuzzer-found, always significant
+     - "kernel test robot" = build/static analysis issue
 
-7. DEPENDENCY CHECK
-   - Does this depend on other commits?
-   - Does the affected code even exist in stable trees?
+  c) Tested-by: Name <email>
+     - The fix has been verified by someone other than the author
+     - Strong quality signal
 
-For deeper investigation, you can use git commands:
-- git log, git blame: Check history and related commits
-- git show <sha>: Examine specific commits (especially Fixes: targets)
-- git log --follow --diff-filter=A: See when files were added
+  d) Reviewed-by: Name <email>
+     - A developer has reviewed the code (check if they are the subsystem maintainer)
+
+  e) Acked-by: Name <email>
+     - A maintainer has acknowledged the patch
+
+  f) Link: URL
+     - lore.kernel.org links = mailing list discussion (investigate in Phase 4)
+     - syzkaller.appspot.com links = syzbot bug report (investigate in Phase 4)
+     - bugzilla.kernel.org links = user-filed bug report
+     - github.com links = may reference related work
+
+  g) Cc: stable@vger.kernel.org
+     - Explicit stable nomination (note: absence is expected and NOT a negative signal)
+
+  h) Signed-off-by: (ignore Sasha Levin's SOB - it's added by the pipeline)
+     - The author's SOB tells you who wrote the fix
+     - Other SOBs show the patch's journey through maintainer trees
+
+  Record: Complete list of all tags with their values. Flag any notable patterns
+  (multiple Reported-by, syzbot, etc.)
+
+Step 1.3: ANALYZE THE COMMIT BODY TEXT
+  - Read every sentence of the commit body carefully
+  - Identify: What bug is described? What symptom does the user see?
+  - Look for: stack traces, error messages, reproduction steps, crash descriptions
+  - Look for: "can cause", "may lead to", "results in", "triggers" - these describe
+    the failure mode
+  - Look for references to other commits, patches, or discussions
+  - Look for explicit mention of kernel versions affected
+  - Distinguish between: the author explaining the bug mechanism vs. describing
+    the fix approach
+  Record: [Bug description as understood from message] [Symptom/failure mode]
+  [Any version information] [Author's explanation of root cause]
+
+Step 1.4: DETECT HIDDEN BUG FIXES
+  Many commits are bug fixes disguised with non-fix language:
+  - "Clean up error handling" -> often fixes resource leaks on error paths
+  - "Improve locking" -> often fixes race conditions
+  - "Simplify X" -> often fixes complex bug-prone logic
+  - "Handle X properly" -> almost certainly fixing incorrect handling
+  - "Ensure X" -> adding a missing safety check
+  - "Initialize X" -> fixing uninitialized variable use
+  - "Balance refcount" -> fixing leak (missing put) or UAF (extra put)
+  - "Add missing check" -> fixing NULL deref, overflow, or other crash
+  Record: [Is this commit likely a hidden bug fix? Why or why not?]
+
+===============================================================
+PHASE 2: DIFF ANALYSIS - LINE BY LINE
+===============================================================
+
+Step 2.1: INVENTORY THE CHANGES
+  - List every file modified and whether lines were added, removed, or changed
+  - Count total lines added/removed (rough scope metric)
+  - Identify which functions are modified (look at @@ hunk headers)
+  - Classify the change: single-file surgical fix, multi-file refactor, or
+    cross-subsystem change
+  Record: [Files changed with +/- counts] [Functions modified] [Scope classification]
+
+Step 2.2: UNDERSTAND THE CODE FLOW CHANGE
+  For each hunk in the diff:
+  - What was the code doing BEFORE this change?
+  - What does the code do AFTER this change?
+  - What specific execution path is affected?
+  - Is this changing a normal path, an error path, or an initialization path?
+  Record: [For each hunk: before behavior -> after behavior]
+
+Step 2.3: IDENTIFY THE BUG MECHANISM
+  Based on the diff, classify what kind of bug this fixes (if any):
+
+  a) Error path / resource leak fixes:
+     - New goto labels, new cleanup code before returns
+     - Added kfree/put_device/release/of_node_put on error paths
+     - "goto err" additions, new error handling blocks
+
+  b) Synchronization / race condition fixes:
+     - Added locks: spin_lock*, mutex_lock*, down_read/write*, raw_spin_lock*
+     - Memory barriers: smp_mb, smp_wmb, smp_rmb, smp_store_release, smp_load_acquire
+     - RCU: rcu_read_lock, synchronize_rcu, rcu_dereference, call_rcu
+     - Atomics: READ_ONCE, WRITE_ONCE, atomic_*, xchg, cmpxchg
+
+  c) Reference counting fixes:
+     - get_device/put_device, kobject_get/put, kref_get/put
+     - of_node_get/put, fget/fput, dget/dput, iget/iput
+     - try_module_get/module_put
+     - Check: is a put being ADDED (leak fix) or REMOVED (double-free fix)?
+
+  d) Memory safety fixes:
+     - NULL checks before dereference
+     - Bounds checks before array access (ARRAY_SIZE, min_t, max_t)
+     - Size validation before copy/allocation
+     - Moving kfree() after last use (UAF fix)
+     - Adding synchronize_*() before free (RCU UAF fix)
+
+  e) Initialization fixes:
+     - Adding initializers, zeroing memory
+     - kmem_cache_alloc -> kmem_cache_zalloc
+     - memset additions
+
+  f) Type / endianness fixes:
+     - cpu_to_le/be conversions
+     - GENMASK fixes
+     - Type cast corrections
+
+  g) Logic / correctness fixes:
+     - Conditional expression changes (wrong operator, inverted condition)
+     - Off-by-one fixes
+     - Missing break in switch
+     - Wrong variable used
+
+  h) Hardware workarounds:
+     - Device ID additions (PCI, USB, ACPI, I2C, SPI, OF)
+     - Quirk table entries
+     - DMI match table entries
+     - Timing/delay adjustments for hardware
+
+  Record: [Bug category] [Specific mechanism: what was broken and how the fix works]
+
+Step 2.4: ASSESS THE FIX QUALITY
+  - Is the fix obviously correct? Can you verify it by reading the code?
+  - Is it minimal / surgical, or does it include unrelated changes?
+  - Could the fix itself introduce a regression? (e.g., does adding a lock
+    risk deadlock? does a NULL check change the return path?)
+  - Are there any red flags: large scope, touching multiple subsystems,
+    changing public APIs?
+  Record: [Fix quality assessment] [Any regression risk from the fix itself]
+
+===============================================================
+PHASE 3: GIT HISTORY INVESTIGATION
+===============================================================
+
+Use git commands to investigate the history. REMEMBER: Never use --all flag.
+
+Step 3.1: BLAME THE CHANGED LINES
+  Run git blame on the file(s) modified to understand the history of the
+  code being changed:
+  - git blame <file> -- for lines around the changed area
+  - When was the buggy code introduced? By which commit?
+  - Has this code been stable for a long time, or was it recently added?
+  - A bug in code present since v4.x is more important than a bug in code
+    added last month (more stable trees affected)
+  Record: [Commit that introduced the buggy code] [Kernel version it first appeared]
+
+Step 3.2: FOLLOW THE FIXES: TAG (if present)
+  If the commit message has a "Fixes:" tag:
+  - git show <fixes_sha> - read the commit that introduced the bug
+  - Understand what the original commit did and why it was buggy
+  - git log --oneline <fixes_sha>..HEAD -- <files> - check if there were
+    intermediate fixes for the same issue
+  - Determine: does the Fixes: target exist in stable trees?
+  Record: [Original buggy commit details] [Whether it exists in stable trees]
+  [Any intermediate related fixes]
+
+Step 3.3: CHECK FILE HISTORY FOR RELATED CHANGES
+  - git log --oneline -20 -- <modified_files> - recent changes to the same files
+  - Look for: related fixes, prerequisite refactoring, or patch series
+  - Are there other commits that are prerequisites for this fix?
+  - Is this part of a series (check for "patch X/Y" or sequential commits
+    by the same author touching the same code)?
+  Record: [Related recent commits] [Any prerequisites identified]
+  [Is this standalone or part of a series?]
+
+Step 3.4: CHECK THE AUTHOR'S OTHER COMMITS
+  - git log --oneline --author="<author>" -10 -- <subsystem_path>
+  - Is the author the subsystem maintainer or a regular contributor?
+  - Did the author submit other related fixes around the same time?
+  - A fix from the subsystem maintainer carries more weight
+  Record: [Author's relationship to the subsystem] [Related author commits]
+
+Step 3.5: CHECK FOR DEPENDENT/PREREQUISITE COMMITS
+  - Does this fix reference other commits that must be applied first?
+  - Does the diff assume code structures or functions that may not exist
+    in stable trees?
+  - git log --oneline --grep="<function_name>" -- to find related commits
+  Record: [Dependencies found, if any] [Can this apply standalone?]
+
+===============================================================
+PHASE 4: MAILING LIST AND EXTERNAL RESEARCH
+===============================================================
+
+Use "b4 dig" and WebFetch to investigate mailing list history. This phase is
+critical for borderline cases. Do not skip it.
+
+TOOL: b4 dig - FINDING THE ORIGINAL PATCH SUBMISSION
+
+"b4 dig" is the primary tool for tracing a commit back to its original mailing
+list submission on lore.kernel.org. Given a commit hash, it matches by patch-id,
+author, and subject to find the exact thread where the patch was submitted and
+reviewed. This is MORE RELIABLE than manual keyword searches on lore.
+
+Usage:
+  b4 dig -c <commit_hash>
+    Finds the original patch submission and returns the lore.kernel.org URL
+    for the matching thread. This is the fastest way to find a patch's
+    discussion thread. Use this FIRST before falling back to manual searches.
+
+  b4 dig -c <commit_hash> -w
+    Same as above, but also shows the full list of people who were originally
+    included on the patch (To/Cc recipients). This tells you which maintainers,
+    reviewers, and mailing lists were involved in the review. Useful for
+    understanding who vetted the patch and whether the right people reviewed it.
+
+  b4 dig -c <commit_hash> -a
+    Shows ALL revisions of the patch series (v1, v2, v3, etc.), not just the
+    latest matching version. This is critical for understanding how the patch
+    evolved during review - were there significant changes between versions?
+    Did a reviewer raise concerns that were addressed in a later version?
+    Each revision is listed with its date, subject, and lore URL.
+
+  b4 dig -c <commit_hash> -m /tmp/thread.mbox
+    Saves the entire matched thread (patch + all replies) to an mbox file.
+    You can then read the mbox to see the full review discussion, including
+    reviewer comments, NAKs, Acked-by responses, and stable nominations.
+
+Notes on b4 dig:
+  - It searches lore.kernel.org automatically - no need to construct URLs manually
+  - It matches by patch-id (computed from the diff), so it finds the right thread
+    even if the subject line was slightly different during submission
+  - If b4 dig fails to find a match (some very old or unusual patches), fall back
+    to manual lore.kernel.org searches as described below
+  - Use -C (--no-cache) if you suspect stale cached results
+
+Step 4.1: FIND THE ORIGINAL PATCH DISCUSSION
+  First, use b4 dig to find the original submission:
+  - b4 dig -c <commit_hash>
+  - If b4 dig finds a match, use the returned lore URL to fetch the discussion:
+    WebFetch <lore_url> to read the thread
+  - If b4 dig does not find a match, fall back to manual search:
+    WebFetch https://lore.kernel.org/all/?q=<commit_subject_keywords>
+    Try the commit subject (minus subsystem prefix) as search terms
+    Try the author's name + key function names
+
+  Then investigate the patch evolution:
+  - b4 dig -c <commit_hash> -a  to see all series revisions
+  - Check: Is the committed version the latest revision, or was there a newer
+    version that was NOT applied? Multiple revisions suggest review feedback
+    that may be relevant to stability assessment.
+
+  In the discussion, look for:
+  - Was this patch explicitly nominated for stable by a reviewer?
+    (Look for "Cc: stable" suggestions in review comments)
+  - Were there any NAKs or objections?
+  - Did reviewers request changes that were made in later versions?
+  - Is this the latest version of the patch, or was there a v2/v3/v4?
+  - Did the maintainer add any comments about stable suitability?
+  - Did any reviewer flag risks or concerns?
+  Record: [Lore discussion URL from b4 dig] [Series revisions found]
+  [Key reviewer feedback] [Any stable nominations by reviewers]
+  [Any NAKs or concerns]
+
+Step 4.2: CHECK WHO REVIEWED THE PATCH
+  Use b4 dig -w to see the original recipients:
+  - b4 dig -c <commit_hash> -w
+  - Were the appropriate subsystem maintainers included?
+  - Were relevant mailing lists CC'd?
+  - A patch reviewed by the subsystem maintainer carries more weight
+  Record: [Key reviewers/maintainers from b4 dig -w]
+
+Step 4.3: SEARCH FOR THE BUG REPORT (if applicable)
+  If there are Link: tags or Reported-by: tags:
+  - Follow Link: URLs using WebFetch
+  - For syzbot links: check the crash type, reproducer, and affected versions
+  - For bugzilla links: check the severity, number of duplicates, and user reports
+  - Search lore for the original bug report email:
+    WebFetch https://lore.kernel.org/all/?q=<bug_description_keywords>
+  Record: [Bug report details] [Severity from reporter's perspective]
+  [How many users affected]
+
+Step 4.4: CHECK FOR RELATED PATCHES AND SERIES
+  - If b4 dig -a showed this is part of a multi-patch series, investigate:
+    Are the other patches in the series also needed for stable?
+  - Search lore for other patches in the same series:
+    WebFetch https://lore.kernel.org/all/?q=<author_name>+<subsystem>
+  - Is this a standalone fix or does it depend on other patches in the series?
+  Record: [Related patches found] [Series context if applicable]
+
+Step 4.5: CHECK STABLE MAILING LIST HISTORY
+  - Search for whether this fix or the underlying bug has been discussed
+    in the context of stable:
+    WebFetch https://lore.kernel.org/stable/?q=<search_terms>
+  - Check if someone already requested this for stable
+  - Check if there's a known reason it was NOT selected for stable
+  Record: [Any stable-specific discussion found]
+
+===============================================================
+PHASE 5: CODE SEMANTIC ANALYSIS
+===============================================================
+
+Use semcode MCP tools if available (mcp__semcode__*), otherwise use git grep
+and manual analysis. This phase maps the impact surface of the change.
+
+Step 5.1: IDENTIFY KEY FUNCTIONS IN THE DIFF
+  - If semcode available: diff_functions to extract all function names modified
+  - Otherwise: read the @@ hunk headers to identify modified functions
+  - For each modified function, proceed with steps 5.2-5.4
+  Record: [List of functions modified or added in the diff]
+
+Step 5.2: TRACE CALLERS (Who calls the affected code?)
+  - If semcode available: find_callers for each key function modified
+  - Otherwise: git grep "<function_name>" to find call sites
+  - This tells you the IMPACT SURFACE: how many code paths are affected?
+  - Pay special attention to: is this called from interrupt context?
+    From syscall handlers? From hot paths? From module init/cleanup?
+  - A fix to a function called from 50 places has higher impact than
+    one called from 1 place
+  Record: [For each function: list of callers and calling context]
+
+Step 5.3: TRACE CALLEES (What does the affected code call?)
+  - If semcode available: find_calls for each key function
+  - Otherwise: read the function body in context
+  - This helps understand the function's purpose and side effects
+  - Look for: memory allocation calls, lock operations, I/O operations
+  Record: [Key callees that help understand the function's role]
+
+Step 5.4: FOLLOW THE CALL CHAIN (for bug reachability)
+  - If semcode available: find_callchain for critical functions
+  - Otherwise: manually trace the most important call path
+  - This answers: "Can a user actually trigger this code path?"
+  - Code reachable from syscalls or common device operations = HIGH priority
+  - Code only reachable from obscure config options = LOWER priority
+  Record: [Call chain summary] [Is the buggy path reachable from userspace?]
+
+Step 5.5: SEARCH FOR SIMILAR PATTERNS
+  - If semcode available: grep_functions for similar code patterns
+  - Otherwise: git grep for the bug pattern in nearby code
+  - Are there other instances of the same bug? (suggests systematic issue)
+  - Was the same fix applied to sibling functions/drivers?
+  Record: [Similar patterns found, if any]
+
+===============================================================
+PHASE 6: CROSS-REFERENCING AND STABLE TREE ANALYSIS
+===============================================================
+
+Step 6.1: DOES THE BUGGY CODE EXIST IN STABLE TREES?
+  - Check whether the file and the specific buggy code exist in stable branches
+  - git log --oneline v6.6.. -- <file> - see what changed since stable branch point
+  - If the buggy code was introduced AFTER the stable branch point, the fix
+    is irrelevant (the bug doesn't exist there)
+  - If the code has been in the tree for many releases, the fix is more valuable
+  Record: [Which stable trees likely contain the buggy code?]
+  [Approximate kernel version the bug was introduced]
+
+Step 6.2: CHECK FOR BACKPORT COMPLICATIONS
+  - Has the file been significantly refactored between mainline and stable?
+  - Would this patch apply cleanly, or would it need modification?
+  - Are there conflicting changes in stable trees?
+  - git log --oneline -10 -- <file> - see recent churn in the file
+  Record: [Expected backport difficulty: clean apply / minor conflicts / needs rework]
+
+Step 6.3: CHECK IF RELATED FIXES ARE ALREADY IN STABLE
+  - Has a different fix for the same bug already been applied to stable?
+  - Is there an earlier version of this fix that went to stable?
+  - git log --oneline --grep="<bug_description>" -- check stable branches
+  Record: [Any related fixes already in stable?]
+
+===============================================================
+PHASE 7: SUBSYSTEM AND MAINTAINER CONTEXT
+===============================================================
+
+Step 7.1: IDENTIFY THE SUBSYSTEM AND ITS CRITICALITY
+  - From the file paths, determine the kernel subsystem:
+    mm/ = memory management, fs/ = filesystems, net/ = networking,
+    drivers/ = device drivers (note the sub-category), kernel/ = core,
+    arch/ = architecture-specific, security/ = security modules,
+    sound/ = audio, crypto/ = cryptography, block/ = block layer
+  - Criticality:
+    - CORE (mm, kernel, fs/vfs, net/core, block) = affects all users
+    - IMPORTANT (specific filesystems, network protocols, common drivers) = affects many users
+    - PERIPHERAL (obscure drivers, arch-specific, staging) = affects fewer users
+  Record: [Subsystem] [Criticality level: CORE/IMPORTANT/PERIPHERAL]
+
+Step 7.2: ASSESS SUBSYSTEM ACTIVITY
+  - git log --oneline -20 -- <subsystem_path> - is this actively developed?
+  - Active subsystem = more likely the fix is for a recently introduced bug
+  - Mature/stable subsystem = bug has been present longer, fix is more important
+  Record: [Subsystem activity level]
+
+===============================================================
+PHASE 8: IMPACT AND RISK ASSESSMENT
+===============================================================
+
+Step 8.1: DETERMINE WHO IS AFFECTED
+  - Core kernel paths (mm, scheduler, VFS) -> ALL users affected
+  - Filesystem-specific -> users of that filesystem
+  - Driver-specific -> users of that hardware
+  - Architecture-specific -> users of that platform
+  - Config-dependent -> only if CONFIG_X is set
+  Record: [Affected user population: universal / filesystem-specific /
+  driver-specific / config-specific / platform-specific]
+
+Step 8.2: DETERMINE THE TRIGGER CONDITIONS
+  - How common is the trigger? Every boot? Every file operation? Only under
+    memory pressure? Only during error recovery? Only with specific hardware?
+  - Can an unprivileged user trigger it? (security relevance)
+  - Is it a timing-dependent race? (hard to reproduce but real)
+  Record: [Trigger conditions] [How common/likely is triggering]
+  [Can unprivileged users trigger it?]
+
+Step 8.3: DETERMINE THE FAILURE MODE SEVERITY
+  When the bug triggers, what happens?
+  - Kernel panic / BUG() / oops -> CRITICAL (system crash, data loss risk)
+  - Deadlock / hang / soft lockup -> CRITICAL (system unusable)
+  - Data corruption (filesystem, memory) -> CRITICAL (silent data loss)
+  - Security vulnerability (privilege escalation, info leak) -> CRITICAL
+  - Memory leak in hot path -> HIGH (eventual OOM, system degradation)
+  - Use-after-free -> HIGH (crash or security, unpredictable)
+  - WARN_ON / error message only -> MEDIUM (no functional impact)
+  - Performance degradation -> MEDIUM (if severe) to LOW
+  - Incorrect error code returned -> LOW to MEDIUM
+  - Cosmetic / logging issue -> LOW
+  Record: [Failure mode] [Severity: CRITICAL/HIGH/MEDIUM/LOW]
+
+Step 8.4: CALCULATE RISK-BENEFIT RATIO
+  BENEFIT: How much does backporting this fix help stable users?
+  - Prevents crashes in common paths = very high benefit
+  - Fixes security hole exploitable from userspace = very high benefit
+  - Fixes hardware enablement for popular devices = high benefit
+  - Fixes rare race in obscure driver = low benefit
+
+  RISK: How much could backporting this fix hurt stable users?
+  - 1-5 lines, obviously correct = very low risk
+  - 5-20 lines, well-contained = low risk
+  - 20-50 lines, touches error paths only = low-medium risk
+  - Touches locking, memory management, or hot paths = medium risk
+  - >100 lines or cross-subsystem = high risk
+  - Changes public APIs or data structures = very high risk
+  Record: [Benefit level] [Risk level] [Ratio assessment]
+
+===============================================================
+PHASE 9: FINAL SYNTHESIS
+===============================================================
+
+Step 9.1: COMPILE THE EVIDENCE
+  Review all findings from Phases 1-8. List:
+  - ALL evidence FOR backporting (bug severity, user impact, fix quality,
+    reviewer endorsements, syzbot reports, etc.)
+  - ALL evidence AGAINST backporting (scope too large, dependencies,
+    code not in stable, regression risk, etc.)
+  - ALL UNRESOLVED QUESTIONS (things you could not verify)
+
+Step 9.2: APPLY THE STABLE RULES CHECKLIST
+  Check each criterion from Documentation/process/stable-kernel-rules.rst:
+  1. Obviously correct and tested? [yes/no with evidence]
+  2. Fixes a real bug that affects users? [yes/no with evidence]
+  3. Important issue (crash, security, corruption, deadlock)? [yes/no - what severity?]
+  4. Small and contained? [yes/no - line count and scope]
+  5. No new features or APIs? [yes/no]
+  6. Can apply to stable trees? [yes/no/unknown]
+
+Step 9.3: CHECK FOR EXCEPTION CATEGORIES
+  Does this fall into an exception category that is automatically YES?
+  - Device ID addition to existing driver
+  - Hardware quirk/workaround
+  - Device tree update for existing hardware
+  - Build fix
+  - Documentation fix
+  Record: [Exception category if applicable]
+
+Step 9.4: MAKE YOUR DECISION
+  Based on ALL the evidence gathered:
+  - If the evidence clearly supports backporting: YES
+  - If the evidence clearly argues against: NO
+  - If borderline: weigh benefit vs. risk, erring on the side of
+    including fixes that prevent crashes, security issues, or data corruption
+
+AVOIDING FALSE NEGATIVES (Missing Real Bugs):
+
+The goal is to find bugs that SHOULD be backported. Be vigilant for:
+
+1. SUBTLE COMMIT MESSAGES:
+   - "Improve X" - might fix a race or leak
+   - "Clean up X" - might fix error handling bugs
+   - "Simplify X" - might fix complex bug-prone code
+   - "Handle X properly" - almost certainly a bug fix
+   - "Ensure X" - likely adding missing safety check
+
+2. SMALL BUT CRITICAL FIXES:
+   - One-line fixes can prevent crashes (NULL check, bounds check)
+   - Adding a single lock/unlock can fix a data race
+   - Adding one 'goto err' can fix a resource leak
+   - Single put_*() call addition fixes refcount bug
+   - Don't dismiss small patches - they're often the most important
+
+3. DRIVER FIXES MATTER:
+   - Even "obscure" drivers have real users who need them
+   - Suspend/resume fixes prevent data loss on laptops
+   - Probe/remove fixes prevent use-after-free on module unload
+   - Hardware quirks make specific devices work at all
+
+4. SUBSYSTEM IMPORTANCE:
+   - Memory management (mm/) - affects everyone
+   - Filesystems (fs/) - data corruption = data loss
+   - Networking (net/) - security exposure, connectivity
+   - Block layer - data integrity
+   - USB/PCI core - hardware access
+
+5. WHEN UNCERTAIN ABOUT A FIX:
+   Ask: "If this bug triggers, what happens to the user?"
+   - Kernel crash/panic = YES
+   - Data corruption = YES
+   - Security vulnerability = YES
+   - System hang/lockup = YES
+   - Resource leak in hot path = YES (eventual OOM)
+   - Minor issue in rare config = Probably NO
+
+6. TRUST INDICATORS:
+   - Multiple "Reported-by:" tags = multiple people hit it = real bug
+   - "Link:" to bug reports/mailing list = documented issue
+   - Detailed commit message explaining mechanism = author understood the bug
+   - Stack traces in commit message = reproducible crash
+   - Author is subsystem maintainer = they know what matters
 
 New Commit to analyze:
 {commit_info}
@@ -533,13 +1235,41 @@ Based on your analysis, should this commit be backported to stable kernel trees?
 RESPONSE FORMAT REQUIREMENTS:
 ========================================
 
+CRITICAL: VERIFY YOUR CLAIMS:
+- Every factual claim you make in your analysis MUST be verified against the actual code,
+  git history, or mailing list discussions. Do NOT speculate or assume.
+- If you claim a function can race, verify the call paths. If you claim code is reachable,
+  trace the callers. If you claim a bug has user impact, find evidence.
+- If you cannot verify a claim, explicitly state it is unverified and do not let unverified
+  claims drive your final YES/NO decision.
+- Do NOT fabricate commit SHAs, function behaviors, or mailing list discussions.
+
 Your response must include:
-1. Comprehensive analysis covering the areas above
+1. A complete walkthrough of ALL 9 phases above, with "Record:" entries for each step.
+   Do not skip phases. If a phase is not applicable, state why in one line and move on.
 2. Detailed explanation of:
    - What problem the commit solves and why it matters to stable users
    - Whether it meets stable kernel rules (obviously correct, fixes real bug, small scope, no new features)
    - Risk vs benefit trade-off
    - Any concerns (dependencies, backport adjustments needed, affected versions)
+3. A "Verification" section listing every verification action you performed and its result,
+   organized by phase, e.g.:
+   Verification:
+   - [Phase 1] Parsed tags: found Reported-by: syzbot, Link: to syzkaller report
+   - [Phase 2] Diff analysis: 3 lines added to error path in foo_probe(), adds missing kfree()
+   - [Phase 3] git blame: buggy code introduced in commit abc123 (v5.15), present in all stable trees
+   - [Phase 3] git show <fixes_sha>: confirmed original commit is in stable 6.1.y and 6.6.y
+   - [Phase 4] b4 dig -c <sha>: found original submission at <lore_URL>
+   - [Phase 4] b4 dig -a: patch went through v1->v3, applied version is latest
+   - [Phase 4] b4 dig -w: subsystem maintainer was CC'd and reviewed the patch
+   - [Phase 4] lore discussion: reviewer suggested Cc: stable
+   - [Phase 5] find_callers: foo_probe() called during device enumeration, common path
+   - [Phase 6] Code exists in all active stable trees (v5.15+)
+   - [Phase 8] Failure mode: NULL deref -> kernel oops on device probe, severity CRITICAL
+   - UNVERIFIED: Could not determine if stable 5.10.y has divergent code in this file
+   Every claim in your analysis must have a corresponding entry here. If you made a claim
+   without verification, list it as UNVERIFIED and do not let unverified claims drive your
+   final YES/NO decision.
 
 FINAL LINE - Your decision:
 The VERY LAST LINE of your response must be EXACTLY **YES** or **NO** (nothing else after it).
