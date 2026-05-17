@@ -519,18 +519,10 @@ Your analysis MUST be thorough and systematic. Work through these areas:
    - Does this depend on other commits?
    - Does the affected code even exist in stable trees?
 
-8. HISTORICAL CONTEXT
-   - Examine "Historical similar commits" below - were similar commits backported?
-
 For deeper investigation, you can use git commands:
 - git log, git blame: Check history and related commits
 - git show <sha>: Examine specific commits (especially Fixes: targets)
 - git log --follow --diff-filter=A: See when files were added
-
-Historical similar commits and their backport status for reference:
-{context}
-
-IMPORTANT: Pay close attention to the Backport Status (YES/NO) of similar commits as they provide valuable reference points.
 
 New Commit to analyze:
 {commit_info}
@@ -563,40 +555,9 @@ Example endings:
 
 REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
 
-        // Format the context from similar commits
-        let mut context_parts = Vec::new();
-
-        for (i, (content, was_backported)) in similar_commits.iter().enumerate() {
-            if content.is_empty() {
-                continue;  // Skip empty content
-            }
-
-            // Extract backport status
-            let backport_status = if *was_backported { "YES" } else { "NO" };
-
-            // Add a clear separator with the similarity ranking and status
-            context_parts.push(format!("--- Similar Commit #{} (Status: {}) ---\n{}", i+1, backport_status, content));
-        }
-
-        let context_text = context_parts.join("\n\n");
-
-        // Replace placeholders in the template
-        if context_text.is_empty() {
-            // When no similar commits, remove the context section from the prompt
-            let prompt_without_context = prompt_template
-                .lines()
-                .filter(|line| !line.contains("Historical similar commits") && 
-                              !line.contains("{context}") &&
-                              !line.contains("IMPORTANT: Pay close attention to the Backport Status"))
-                .collect::<Vec<&str>>()
-                .join("\n");
-            
-            prompt_without_context.replace("{commit_info}", commit_text)
-        } else {
-            prompt_template
-                .replace("{context}", &context_text)
-                .replace("{commit_info}", commit_text)
-        }
+        // Replace placeholder in the template
+        let _ = similar_commits; // unused now that historical context is removed
+        prompt_template.replace("{commit_info}", commit_text)
     }
 
     pub fn find_similar_commits(&self, commit_text: &str, k: usize) -> Vec<(String, bool)> {
