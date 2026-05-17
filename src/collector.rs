@@ -258,7 +258,11 @@ impl BackportDataCollector {
         // Hash the message
         let mut hasher = Sha256::new();
         hasher.update(message.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
+        let hash: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
 
         Some((hash, subject))
     }
@@ -532,14 +536,22 @@ mod tests {
         // Calculate SHA-256 hash of the full message
         let mut hasher = Sha256::new();
         hasher.update(full_message.as_bytes());
-        let expected_hash = format!("{:x}", hasher.finalize());
+        let expected_hash: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
 
         // Since we can't call the original method without a git repo,
         // we'll reimplement the logic here for testing
         let subject_line = full_message.lines().next().unwrap_or("").to_string();
         let mut hasher = Sha256::new();
         hasher.update(full_message.as_bytes());
-        let message_hash = format!("{:x}", hasher.finalize());
+        let message_hash: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect();
 
         // Verify subject line and hash match expectations
         assert_eq!(subject_line, subject);
