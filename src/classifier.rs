@@ -72,7 +72,7 @@ impl BackportClassifier {
         configs.insert("claude".to_string(), serde_json::json!({
             "model": "claude-3-7-sonnet-20250219",
             "temperature": 0,
-            "max_tokens": 4000,
+            "max_tokens": 16000,
             "debug_logging": false
         }));
 
@@ -80,14 +80,14 @@ impl BackportClassifier {
         configs.insert("nvidia".to_string(), serde_json::json!({
             "model_type": "deepseek",
             "temperature": 0.6,
-            "max_tokens": 4096
+            "max_tokens": 16384
         }));
 
         // OpenAI default config
         configs.insert("openai".to_string(), serde_json::json!({
             "model_type": "gpt4o",
             "temperature": 0.2,
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             "debug_logging": false
         }));
 
@@ -95,7 +95,7 @@ impl BackportClassifier {
         configs.insert("ollama".to_string(), serde_json::json!({
             "model_type": "llama3",
             "temperature": 0.1,
-            "max_tokens": 4096,
+            "max_tokens": 16384,
             "api_host": "http://localhost:11434",
             "debug_logging": false
         }));
