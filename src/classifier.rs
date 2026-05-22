@@ -100,19 +100,6 @@ impl BackportClassifier {
             "debug_logging": false
         }));
 
-        // Kiro default config (uses ACP JSON-RPC protocol)
-        let kiro_path = std::process::Command::new("which")
-            .arg("kiro-cli")
-            .output()
-            .ok()
-            .and_then(|o| if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
-            } else { None })
-            .unwrap_or_else(|| "kiro-cli".to_string());
-        configs.insert("kiro".to_string(), serde_json::json!({
-            "executable_path": kiro_path
-        }));
-
         configs
     }
 
