@@ -13,7 +13,7 @@ AUTOSEL is a tool designed to automatically classify whether Linux kernel commit
 
 ## Requirements
 
-- Rust (2024 edition)
+- Rust 1.88 or newer (2024 edition, uses let-chains)
 - Linux kernel repository (local)
 - API keys for supported LLM providers
 
@@ -21,7 +21,7 @@ AUTOSEL is a tool designed to automatically classify whether Linux kernel commit
 
 1. Clone this repository:
    ```
-   git clone https://github.com/sashal/autosel.git
+   git clone https://github.com/sashalevin/autosel.git
    cd autosel
    ```
 
@@ -130,4 +130,24 @@ SPDX-License-Identifier: GPL-2.0
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit pull requests or open issues for bugs and feature requests.
+Contributions are welcome. Open a pull request against `main` at
+<https://github.com/sashalevin/autosel>, or file an issue for bugs and feature
+requests.
+
+This project follows kernel conventions:
+
+- **Sign your work.** Every commit needs a `Signed-off-by:` line certifying the
+  [Developer Certificate of Origin](https://developercertificate.org/).
+  `git commit -s` adds it, and CI checks it on pull requests.
+- **Commit messages** use imperative subjects, optionally prefixed with the
+  subsystem (`classifier: drop redundant kiro default config`). Explain *why*
+  in the body, wrapped at 72 columns.
+- **One logical change per commit.** Pull requests are merged with rebase, so
+  each commit must build and pass tests on its own.
+- Run `cargo test` before opening a pull request.
+
+Emailed patches to `sashal@kernel.org` are still accepted, but pull requests
+are preferred and get CI coverage.
+
+The classification library lives in a separate repository:
+<https://github.com/sashalevin/commit-classifier>.

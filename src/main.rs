@@ -22,7 +22,7 @@ use utils::setup_logging;
 #[allow(clippy::too_many_lines)]
 fn main() {
     let matches = Command::new("Linux Kernel Backport Classifier")
-        .version("0.1.0")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("Sasha Levin <sashal@kernel.org>")
         .about("Classifies if Linux kernel commits should be backported to stable trees")
         .arg(Arg::new("kernel-repo")
