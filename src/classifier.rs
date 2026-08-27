@@ -400,6 +400,22 @@ You are evaluating whether this commit SHOULD be backported. It has NOT been sel
 - Your job is to make the YES/NO decision based purely on TECHNICAL MERIT of the fix itself
 - Do NOT say "this is already selected" or "this has been prepared for backport" - that's circular reasoning
 
+CRITICAL: DECIDE FOR THE LOCALLY CHECKED-OUT TREE ONLY:
+
+You are running inside a git checkout of one specific kernel tree. Your verdict is
+about THAT tree and no other one.
+- Establish which tree you are in before you decide: "git describe HEAD",
+  "make kernelversion", or the Makefile VERSION/PATCHLEVEL/SUBLEVEL lines
+- Then answer exactly one question: should this commit be backported to THIS tree?
+- Check the code, the prerequisites and the context in THIS checkout - not in some
+  other stable series you remember
+
+Do NOT split your answer across kernel versions. "YES for 6.12.y and 6.18.y, not
+applicable to 6.6.y" is not a usable answer, because only one tree is being decided.
+If the code this commit touches is missing from the local tree, if the fix needs
+commits that are not in it, or if the bug was introduced after this tree branched,
+then the answer is NO.
+
 UNDERSTANDING STABLE KERNEL TREES:
 
 The Linux kernel stable trees (also known as -stable or LTS trees) are long-term supported versions that receive critical bug fixes
@@ -1044,30 +1060,33 @@ Step 5.5: SEARCH FOR SIMILAR PATTERNS
   Record: [Similar patterns found, if any]
 
 ===============================================================
-PHASE 6: CROSS-REFERENCING AND STABLE TREE ANALYSIS
+PHASE 6: CROSS-REFERENCING AGAINST THE LOCAL TREE
 ===============================================================
 
-Step 6.1: DOES THE BUGGY CODE EXIST IN STABLE TREES?
-  - Check whether the file and the specific buggy code exist in stable branches
-  - git log --oneline v6.6.. -- <file> - see what changed since stable branch point
-  - If the buggy code was introduced AFTER the stable branch point, the fix
-    is irrelevant (the bug doesn't exist there)
+Every step here is about the tree you have checked out. Inspect it directly rather
+than reasoning from memory about what some stable series contains.
+
+Step 6.1: DOES THE BUGGY CODE EXIST IN THIS TREE?
+  - Check whether the file and the specific buggy code exist in this checkout
+  - git log --oneline -- <file> - see what changed in this tree
+  - If the buggy code was introduced after this tree branched, the fix is
+    irrelevant here (the bug does not exist in it) - that is a NO
   - If the code has been in the tree for many releases, the fix is more valuable
-  Record: [Which stable trees likely contain the buggy code?]
+  Record: [Does the buggy code exist in this tree? Where?]
   [Approximate kernel version the bug was introduced]
 
 Step 6.2: CHECK FOR BACKPORT COMPLICATIONS
-  - Has the file been significantly refactored between mainline and stable?
-  - Would this patch apply cleanly, or would it need modification?
-  - Are there conflicting changes in stable trees?
+  - Has the file been significantly refactored between mainline and this tree?
+  - Would this patch apply cleanly here, or would it need modification?
+  - Are there conflicting changes in this tree?
   - git log --oneline -10 -- <file> - see recent churn in the file
   Record: [Expected backport difficulty: clean apply / minor conflicts / needs rework]
 
-Step 6.3: CHECK IF RELATED FIXES ARE ALREADY IN STABLE
-  - Has a different fix for the same bug already been applied to stable?
-  - Is there an earlier version of this fix that went to stable?
-  - git log --oneline --grep="<bug_description>" -- check stable branches
-  Record: [Any related fixes already in stable?]
+Step 6.3: CHECK IF RELATED FIXES ARE ALREADY HERE
+  - Has a different fix for the same bug already been applied to this tree?
+  - Is there an earlier version of this fix already in it?
+  - git log --oneline --grep="<bug_description>"
+  Record: [Any related fixes already present?]
 
 ===============================================================
 PHASE 7: SUBSYSTEM AND MAINTAINER CONTEXT
@@ -1155,16 +1174,18 @@ Step 9.1: COMPILE THE EVIDENCE
   - ALL UNRESOLVED QUESTIONS (things you could not verify)
 
 Step 9.2: APPLY THE STABLE RULES CHECKLIST
-  Check each criterion from Documentation/process/stable-kernel-rules.rst:
-  1. Obviously correct and tested? [yes/no with evidence]
-  2. Fixes a real bug that affects users? [yes/no with evidence]
-  3. Important issue (crash, security, corruption, deadlock)? [yes/no - what severity?]
-  4. Small and contained? [yes/no - line count and scope]
-  5. No new features or APIs? [yes/no]
-  6. Can apply to stable trees? [yes/no/unknown]
+  Check each criterion from Documentation/process/stable-kernel-rules.rst.
+  Answer each one PASS or FAIL - never "yes" or "no", so that YES and NO stay
+  reserved for your final verdict and cannot be mistaken for it:
+  1. Obviously correct and tested? [PASS/FAIL with evidence]
+  2. Fixes a real bug that affects users? [PASS/FAIL with evidence]
+  3. Important issue (crash, security, corruption, deadlock)? [PASS/FAIL - what severity?]
+  4. Small and contained? [PASS/FAIL - line count and scope]
+  5. No new features or APIs? [PASS/FAIL]
+  6. Can apply to the local tree? [PASS/FAIL/UNKNOWN]
 
 Step 9.3: CHECK FOR EXCEPTION CATEGORIES
-  Does this fall into an exception category that is automatically YES?
+  Does this fall into an exception category that automatically qualifies?
   - Device ID addition to existing driver
   - Hardware quirk/workaround
   - Device tree update for existing hardware
@@ -1257,14 +1278,14 @@ Your response must include:
    Verification:
    - [Phase 1] Parsed tags: found Reported-by: syzbot, Link: to syzkaller report
    - [Phase 2] Diff analysis: 3 lines added to error path in foo_probe(), adds missing kfree()
-   - [Phase 3] git blame: buggy code introduced in commit abc123 (v5.15), present in all stable trees
-   - [Phase 3] git show <fixes_sha>: confirmed original commit is in stable 6.1.y and 6.6.y
+   - [Phase 3] git blame: buggy code introduced in commit abc123 (v5.15), present in this tree
+   - [Phase 3] git show <fixes_sha>: confirmed original commit is in this tree
    - [Phase 4] b4 dig -c <sha>: found original submission at <lore_URL>
    - [Phase 4] b4 dig -a: patch went through v1->v3, applied version is latest
    - [Phase 4] b4 dig -w: subsystem maintainer was CC'd and reviewed the patch
    - [Phase 4] lore discussion: reviewer suggested Cc: stable
    - [Phase 5] find_callers: foo_probe() called during device enumeration, common path
-   - [Phase 6] Code exists in all active stable trees (v5.15+)
+   - [Phase 6] git describe HEAD: local tree is v6.12.y; buggy code present in it
    - [Phase 8] Failure mode: NULL deref -> kernel oops on device probe, severity CRITICAL
    - UNVERIFIED: Could not determine if stable 5.10.y has divergent code in this file
    Every claim in your analysis must have a corresponding entry here. If you made a claim
@@ -1273,6 +1294,16 @@ Your response must include:
 
 FINAL LINE - Your decision:
 The VERY LAST LINE of your response must be EXACTLY **YES** or **NO** (nothing else after it).
+
+The verdict line stands alone. Do NOT write it as part of a sentence
+("the recommendation remains **NO** for stable backport") and do NOT label it
+("**Verdict: NO**"). Do NOT add a caveat, summary, or any other text after it.
+
+Run every command in the foreground and wait for its output. Do NOT put a command
+in the background or start anything whose result arrives later: when a background
+task reports back after you have answered, its text gets appended to your response
+and destroys the final line. Before writing the verdict, confirm nothing is still
+running and you have nothing left to add.
 
 Example endings:
 ...The fix is small, surgical, and meets all stable kernel criteria.
@@ -1466,6 +1497,83 @@ REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
         })
     }
 
+    // Extract a YES/NO verdict from the bold (**...**) spans of a single line
+    // Matches a bare "**NO**" embedded in a sentence as well as a labelled span
+    // such as "**Stable backport recommendation: NO**". The last verdict on the
+    // line wins, since models tend to build up to their final answer
+    //
+    // A line holding both verdicts states no conclusion - it is a criterion split
+    // per tree ("**NO** for 6.6, **YES** for 6.12"), or our own prompt echoed back
+    // into the output ("must be EXACTLY **YES** or **NO**") - so it yields nothing
+    fn bold_verdict_in_line(line: &str) -> Option<bool> {
+        let mut verdict = None;
+        let mut rest = line;
+
+        while let Some(open) = rest.find("**") {
+            let after_open = &rest[open + 2..];
+            let Some(close) = after_open.find("**") else {
+                break;
+            };
+            let span = &after_open[..close];
+            rest = &after_open[close + 2..];
+
+            match Self::verdict_from_span(span) {
+                Some(true) if verdict == Some(false) => return None,
+                Some(false) if verdict == Some(true) => return None,
+                Some(v) => verdict = Some(v),
+                None => {}
+            }
+        }
+
+        verdict
+    }
+
+    // Read a verdict out of the text of one bold span
+    fn verdict_from_span(span: &str) -> Option<bool> {
+        let word_verdict = |word: &str| match word.trim().to_uppercase().as_str() {
+            "YES" => Some(true),
+            "NO" => Some(false),
+            _ => None,
+        };
+
+        let span = span.trim().trim_end_matches(['.', '!', ':', ',']).trim();
+
+        // Text after the last colon, so "Recommendation: NO" is recognised while a
+        // checklist label like "Tested:" is not
+        let tail = span.rsplit(':').next().unwrap_or(span);
+        if let Some(verdict) = word_verdict(tail) {
+            return Some(verdict);
+        }
+
+        // A whole span that states the verdict in words ("Backport recommendation
+        // remains YES") ends on the answer. The keyword is what separates it from
+        // an ordinary sentence that happens to end in yes or no
+        let upper = span.to_uppercase();
+        if ["DECISION", "VERDICT", "RECOMMENDATION", "ANSWER", "CONCLUSION", "ASSESSMENT",
+            "DETERMINATION", "BACKPORT"].iter().any(|keyword| upper.contains(keyword))
+        {
+            let last_word = span.split_whitespace().next_back()?;
+            return word_verdict(last_word.trim_matches(|c: char| !c.is_alphanumeric()));
+        }
+
+        None
+    }
+
+    // Check an uppercased line for "<label>: <verdict>", rejecting matches that
+    // run into a longer word (e.g. "DECISION: NOT CLEAR" is not a NO)
+    fn has_labeled_verdict(line_upper: &str, label: &str, verdict: &str) -> bool {
+        for separator in [": ", ":"] {
+            let pattern = format!("{label}{separator}{verdict}");
+            for (idx, _) in line_upper.match_indices(&pattern) {
+                let next = line_upper[idx + pattern.len()..].chars().next();
+                if !next.is_some_and(|c| c.is_alphanumeric()) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     // Parse LLM response to extract decision and explanation
     // The prompt requires the response to END with **YES** or **NO** on the last line
     // but we have fallback patterns for LLMs that don't follow the format exactly
@@ -1540,31 +1648,28 @@ REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
         // Log a warning and try fallback patterns
         warn!("LLM response did not end with **YES** or **NO** as required. Last line: '{}'", last_line_trimmed);
 
-        // PRIORITY 2: Scan for **YES** or **NO** anywhere (bold patterns win)
-        // Skip lines that look like checklist items (contain ":**")
-        // Scan forwards to find the FIRST standalone bold pattern
-        for line in trimmed.lines() {
+        // PRIORITY 2: Scan backwards for the last bold (**...**) verdict in the response
+        // The verdict belongs on the last line, so when a model keeps talking - or the
+        // agent harness appends a background-task notice right after it, with no newline
+        // ("**NO**The background search ... finished") - the LAST bold verdict is still
+        // the conclusion. Checklist items ("- **Tested:** YES") never match, because the
+        // bold span itself has to be the verdict
+        for line in trimmed.lines().rev() {
             let line_trimmed = line.trim();
 
-            // Skip empty lines
-            if line_trimmed.is_empty() {
+            // Rules-check table rows ("| Fixes a real bug? | **NO** |") and checklist
+            // bullets ("- **Applies to 6.6:** **NO**") answer one criterion each, not
+            // the overall question. Note "* " needs the space: **NO** starts with '*'
+            if line_trimmed.starts_with(['|', '>'])
+                || line_trimmed.starts_with("- ")
+                || line_trimmed.starts_with("* ")
+                || line_trimmed.starts_with("+ ") {
                 continue;
             }
 
-            // Skip checklist items (e.g., "- **Tested:** YES")
-            if line_trimmed.contains(":**") {
-                continue;
-            }
-
-            // Check for standalone **YES** or **NO** (not part of longer bold text)
-            // Match **YES** at start of line or as whole token
-            if line_trimmed == "**YES**" || line_trimmed.starts_with("**YES** ") || line_trimmed.starts_with("**YES**\t") {
-                warn!("Found **YES** in response but not on last line");
-                return (true, filtered_response.to_string());
-            }
-            if line_trimmed == "**NO**" || line_trimmed.starts_with("**NO** ") || line_trimmed.starts_with("**NO**\t") {
-                warn!("Found **NO** in response but not on last line");
-                return (false, filtered_response.to_string());
+            if let Some(verdict) = Self::bold_verdict_in_line(line_trimmed) {
+                warn!("Found bold verdict in response but not alone on the last line");
+                return (verdict, filtered_response.to_string());
             }
         }
 
@@ -1581,16 +1686,19 @@ REMEMBER: Last line MUST be exactly **YES** or **NO** - nothing else!"#;
             }
         }
 
-        // PRIORITY 4: Check for DECISION: YES / DECISION: NO patterns
+        // PRIORITY 4: Check for labelled verdicts (DECISION: YES, Recommendation: NO, ...)
+        // Bold markers are stripped so "**Verdict: NO**" is matched the same way
         for line in trimmed.lines() {
-            let line_upper = line.to_uppercase();
-            if line_upper.contains("DECISION: YES") || line_upper.contains("DECISION:YES") {
-                warn!("Found DECISION: YES pattern");
-                return (true, filtered_response.to_string());
-            }
-            if line_upper.contains("DECISION: NO") || line_upper.contains("DECISION:NO") {
-                warn!("Found DECISION: NO pattern");
-                return (false, filtered_response.to_string());
+            let line_upper = line.to_uppercase().replace("**", "");
+            for label in ["DECISION", "RECOMMENDATION", "VERDICT", "ANSWER"] {
+                if Self::has_labeled_verdict(&line_upper, label, "YES") {
+                    warn!("Found {label}: YES pattern");
+                    return (true, filtered_response.to_string());
+                }
+                if Self::has_labeled_verdict(&line_upper, label, "NO") {
+                    warn!("Found {label}: NO pattern");
+                    return (false, filtered_response.to_string());
+                }
             }
         }
 
@@ -1795,6 +1903,91 @@ The commit should not be backported because it introduces new features.
         assert!(!should_backport);
 
         let response = "Rules check:\n- **Fixes bug:** YES\n- **Security:** NO\n\nThis should be backported.\n\n**YES**";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+    }
+
+    #[test]
+    fn test_parse_llm_response_verdict_embedded_in_last_line() {
+        // Bold verdict wrapped in prose on the last line
+        let response = "Analysis of the refactor.\n\nThat reinforces the earlier conclusion: **NO** for stable backport.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+
+        let response = "This fixes a NULL deref.\n\nSo the conclusion is **YES** for stable backport.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+
+        // Labelled verdict inside a single bold span
+        let response = "Only debugfs output is affected.\n\n**Stable backport recommendation: NO** - it only affects bootlog collection.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+
+        let response = "Fixes a use-after-free.\n\n**Stable backport recommendation: YES** - it fixes a real crash.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+
+        // Bold verdicts earlier in the response must not hijack the last line
+        let response = "Step 1: is it a bug fix? **YES**\n\nBut the fix depends on a new API, so the answer is **NO**.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+    }
+
+    #[test]
+    fn test_parse_llm_response_verdict_stated_in_words() {
+        // The whole bold span is the verdict statement, with no colon before the answer
+        let response = "Analysis of the rz-du driver.\n\n**Backport recommendation remains YES** for the trees where the driver exists.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+
+        let response = "Analysis of the cleanup.\n\n**The stable backport verdict is NO** - no functional change.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+
+        // An ordinary bold phrase ending in yes/no is not a verdict
+        let response = "**YES** This commit should be backported. **Similar commits marked NO** were wrong.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+    }
+
+    #[test]
+    fn test_parse_llm_response_verdict_glued_to_trailing_output() {
+        // The agent harness can append a background-task notice straight after the
+        // verdict with no newline in between
+        let response = "- [Phase 8] No failure mode identified\n\n**NO**The background search finished successfully but returned no matches.\n\nThat fits the earlier conclusion: it is an isolated rename.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+
+        let response = "- [Phase 8] NULL deref on probe\n\n**YES**The background grep finished; no further callers found.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+    }
+
+    #[test]
+    fn test_parse_llm_response_ignores_checklist_and_table_verdicts() {
+        // A rules-check table answers one criterion per row - none of them is the verdict
+        let response = "| Criterion | Answer |\n| 2. Fixes a real bug? | **NO** |\n| 6. Applies to stable? | **NO** for 6.6; irrelevant for 6.18 |\n\nThis fix should be backported to all affected trees.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+
+        // Same for checklist bullets carrying a standalone bold answer
+        let response = "- **Can apply standalone to 6.6/6.12:** **NO** - will not compile.\n\nThis commit should be backported once the prerequisite lands.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+    }
+
+    #[test]
+    fn test_parse_llm_response_labeled_verdicts() {
+        let response = "Some analysis.\n\nRecommendation: YES\n\nTrailing notes about the subsystem.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(should_backport);
+
+        let response = "Some analysis.\n\nVerdict: NO\n\nTrailing notes about the subsystem.";
+        let (should_backport, _) = BackportClassifier::parse_llm_response(response);
+        assert!(!should_backport);
+
+        // A label followed by a longer word is not a verdict
+        let response = "Some analysis.\n\nDECISION: NOTHING TO BACKPORT\n\nThis should be backported anyway.";
         let (should_backport, _) = BackportClassifier::parse_llm_response(response);
         assert!(should_backport);
     }
